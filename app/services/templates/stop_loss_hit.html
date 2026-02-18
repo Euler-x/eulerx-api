@@ -1,0 +1,35 @@
+<h2 style="margin:0 0 8px;font-size:22px;color:#FF4444;">Stop Loss Triggered</h2>
+<p style="margin:0 0 24px;font-size:15px;color:#AAAAAA;line-height:1.6;">
+  Your trade on <strong style="color:#FFFFFF;">{strategy_name}</strong> hit its stop loss.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:#888888;width:140px;">Symbol</td>
+    <td style="padding:8px 0;font-size:14px;color:#FFFFFF;font-weight:500;">{symbol}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:#888888;width:140px;">Direction</td>
+    <td style="padding:8px 0;font-size:14px;color:#FFFFFF;font-weight:500;">{direction}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:#888888;width:140px;">Entry Price</td>
+    <td style="padding:8px 0;font-size:14px;color:#FFFFFF;font-weight:500;">{entry_price}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:#888888;width:140px;">Exit Price</td>
+    <td style="padding:8px 0;font-size:14px;color:#FFFFFF;font-weight:500;">{exit_price}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:#888888;width:140px;">PnL</td>
+    <td style="padding:8px 0;font-size:14px;color:{pnl_color};font-weight:700;">{pnl}</td>
+  </tr>
+</table>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px auto 0;">
+  <tr>
+    <td align="center" style="background-color:#39FF14;border-radius:8px;">
+      <a href="{frontend_url}/executions" target="_blank" style="display:inline-block;padding:14px 36px;font-size:15px;font-weight:600;color:#0D0D0D;text-decoration:none;letter-spacing:0.5px;">
+        View Execution
+      </a>
+    </td>
+  </tr>
+</table>

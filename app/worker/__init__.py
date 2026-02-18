@@ -1,0 +1,1 @@
+"""EulerX Celery worker package."""

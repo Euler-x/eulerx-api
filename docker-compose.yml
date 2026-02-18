@@ -1,0 +1,132 @@
+version: "3.9"
+
+# ============================================================
+# Networks
+# ============================================================
+networks:
+  eulerx-network:
+    driver: bridge
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  postgres_data:
+    driver: local
+
+# ============================================================
+# Services
+# ============================================================
+services:
+
+  # ----------------------------------------------------------
+  # API (FastAPI via Gunicorn + Uvicorn)
+  # ----------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eulerx_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - eulerx-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ----------------------------------------------------------
+  # Celery Worker
+  # ----------------------------------------------------------
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eulerx_celery_worker
+    restart: unless-stopped
+    command: >
+      celery -A app.worker.celery_app worker
+      -l info
+      -Q analysis,signals,execution,maintenance,notifications
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - eulerx-network
+
+  # ----------------------------------------------------------
+  # Celery Beat (Scheduler)
+  # ----------------------------------------------------------
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eulerx_celery_beat
+    restart: unless-stopped
+    command: celery -A app.worker.celery_app beat -l info
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - eulerx-network
+
+  # ----------------------------------------------------------
+  # Redis
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: eulerx_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - eulerx-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 5
+
+  # ----------------------------------------------------------
+  # PostgreSQL
+  # ----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: eulerx_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: eulerx
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: eulerx_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - eulerx-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eulerx -d eulerx_db"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
