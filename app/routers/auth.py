@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_optional_user
 from app.models.ambassador import Ambassador
 from app.models.enums import WalletType
 from app.models.schemas.auth import (
@@ -14,7 +14,9 @@ from app.models.schemas.auth import (
     EmailSubmitRequest,
     EmailVerificationResponse,
     EmailVerifyRequest,
+    LoginRequest,
     RefreshTokenRequest,
+    RegisterRequest,
     SignMessageResponse,
     UserResponse,
     WalletConnectRequest,
@@ -29,16 +31,119 @@ from app.utils.security import (
     create_access_token,
     create_refresh_token,
     generate_sign_message,
+    hash_password,
+    verify_password,
     verify_token,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
+# ── Email/Password Authentication ────────────────────────────────
+
+
+@router.post("/register", response_model=AuthResponse)
+async def register(
+    request: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a new user with email and password."""
+    existing = await db.execute(
+        select(User).where(User.email == request.email)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email already exists.",
+        )
+
+    user = User(
+        email=request.email,
+        password_hash=hash_password(request.password),
+        email_verified=False,
+    )
+    db.add(user)
+    await db.flush()
+
+    # Handle referral
+    if request.referral_code:
+        ref_result = await db.execute(
+            select(Ambassador).where(
+                Ambassador.referral_code == request.referral_code
+            )
+        )
+        referrer = ref_result.scalar_one_or_none()
+        if referrer:
+            ambassador = Ambassador(
+                user_id=user.id,
+                referral_code=generate_referral_code(),
+                referred_by=referrer.id,
+            )
+            db.add(ambassador)
+            referrer.total_referrals += 1
+            referrer.team_size += 1
+
+    # Send verification email
+    notification_service = NotificationService()
+    await notification_service.send_verification_email(db, user)
+
+    access_token = create_access_token(str(user.id), user.is_admin)
+    refresh_token = create_refresh_token(str(user.id))
+
+    return AuthResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=UserResponse.model_validate(user),
+    )
+
+
+@router.post("/login", response_model=AuthResponse)
+async def login(
+    request: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Login with email and password."""
+    result = await db.execute(
+        select(User).where(User.email == request.email)
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None or not user.password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+        )
+
+    if not verify_password(request.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated. Please contact support.",
+        )
+
+    access_token = create_access_token(str(user.id), user.is_admin)
+    refresh_token = create_refresh_token(str(user.id))
+
+    return AuthResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=UserResponse.model_validate(user),
+    )
+
+
+# ── Wallet Authentication ────────────────────────────────────────
+
+
 @router.post("/connect", response_model=AuthResponse)
 async def connect_wallet(
     request: WalletConnectRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
 ):
     if not WalletService.verify_signature(
         request.wallet_address, request.message, request.signature
@@ -50,12 +155,33 @@ async def connect_wallet(
 
     address_hash = WalletService.hash_address(request.wallet_address)
 
+    # Check if wallet is already linked to another user
     result = await db.execute(
         select(User).where(User.wallet_address_hash == address_hash)
     )
-    user = result.scalar_one_or_none()
+    existing_wallet_user = result.scalar_one_or_none()
 
-    if user is None:
+    if current_user is not None:
+        # Authenticated user linking a wallet from dashboard
+        if existing_wallet_user and existing_wallet_user.id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This wallet is already linked to another account.",
+            )
+        if current_user.wallet_address_hash and current_user.wallet_address_hash != address_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A wallet is already connected to your account.",
+            )
+        current_user.wallet_address_hash = address_hash
+        current_user.wallet_type = WalletType.CONNECTED
+        await db.flush()
+        user = current_user
+    elif existing_wallet_user is not None:
+        # Existing wallet-only user logging in
+        user = existing_wallet_user
+    else:
+        # New wallet-only user (legacy flow)
         user = User(
             wallet_address_hash=address_hash,
             wallet_type=WalletType.CONNECTED,

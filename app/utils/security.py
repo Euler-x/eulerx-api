@@ -5,11 +5,24 @@ from datetime import datetime, timezone
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from eth_account.messages import encode_defunct
+from passlib.context import CryptContext
 from web3 import Web3
 
 from app.config import get_settings
 
 settings = get_settings()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+# ─── Password Hashing ─────────────────────────────────
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 # ─── Wallet Address Hashing ─────────────────────────────

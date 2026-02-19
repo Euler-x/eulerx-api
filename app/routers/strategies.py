@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.auth import require_verified_email
-from app.middleware.subscription import SubscriptionInfo, get_subscription_info
+from app.middleware.subscription import SubscriptionInfo, get_subscription_info, require_active_subscription
 from app.models.schemas.common import MessageResponse
 from app.models.schemas.strategy import StrategyCreate, StrategyResponse, StrategyUpdate
 from app.models.strategy import Strategy
@@ -146,6 +146,7 @@ async def delete_strategy(
 async def activate_strategy(
     strategy_id: uuid.UUID,
     current_user: User = Depends(require_verified_email),
+    sub_info: SubscriptionInfo = Depends(require_active_subscription),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

@@ -21,14 +21,26 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    referral_code: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
 class UserResponse(BaseModel):
     id: uuid.UUID
-    wallet_address_hash: str
-    wallet_type: WalletType
+    wallet_address_hash: Optional[str] = None
+    wallet_type: Optional[WalletType] = None
     is_admin: bool
     is_active: bool = True
     email: Optional[str] = None
     email_verified: bool = False
+    has_wallet: bool = False
     telegram_configured: bool = False
     created_at: datetime
 

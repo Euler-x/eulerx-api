@@ -26,14 +26,17 @@ class User(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         GUID(), primary_key=True, default=uuid.uuid4
     )
-    wallet_address_hash: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False, index=True
+    wallet_address_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
     )
-    wallet_type: Mapped[WalletType] = mapped_column(
-        SAEnum(WalletType, name="wallet_type_enum"), nullable=False
+    wallet_type: Mapped[Optional[WalletType]] = mapped_column(
+        SAEnum(WalletType, name="wallet_type_enum"), nullable=True
     )
     encrypted_private_key: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
+    )
+    password_hash: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
     )
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
@@ -64,6 +67,10 @@ class User(Base, TimestampMixin):
     notification_preferences: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True
     )
+
+    @property
+    def has_wallet(self) -> bool:
+        return self.wallet_address_hash is not None
 
     @property
     def telegram_configured(self) -> bool:
