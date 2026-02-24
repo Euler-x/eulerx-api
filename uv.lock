@@ -1184,7 +1184,7 @@ dependencies = [
     { name = "websockets" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "aiosqlite" },
     { name = "coverage" },
@@ -1195,12 +1195,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.20.0" },
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "bcrypt", specifier = ">=4.0.0" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
-    { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.6.0" },
     { name = "cryptography", specifier = ">=44.0.0" },
     { name = "email-validator", specifier = ">=2.0.0" },
     { name = "eth-account", specifier = ">=0.13.0" },
@@ -1213,18 +1211,23 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "python-multipart", specifier = ">=0.0.18" },
     { name = "redis", specifier = ">=5.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "web3", specifier = ">=7.14.1" },
     { name = "websockets", specifier = ">=15.0" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "aiosqlite", specifier = ">=0.20.0" },
+    { name = "coverage", specifier = ">=7.6.0" },
+    { name = "pytest", specifier = ">=8.3.0" },
+    { name = "pytest-asyncio", specifier = ">=0.25.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
 
 [[package]]
 name = "fastapi"
