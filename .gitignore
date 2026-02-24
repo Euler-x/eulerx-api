@@ -14,6 +14,8 @@ wheels/
 .env.local
 .env.production
 
+
+
 # IDE
 .idea/
 .vscode/
@@ -32,3 +34,6 @@ Thumbs.db
 htmlcov/
 .coverage
 coverage.xml
+
+# SSH keys
+.ssh/

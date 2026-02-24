@@ -22,7 +22,6 @@ from app.models.schemas.common import (  # noqa: F401
 from app.models.schemas.auth import (  # noqa: F401
     AuthResponse,
     RefreshTokenRequest,
-    SignMessageResponse,
     UserResponse,
     WalletConnectRequest,
     WalletGenerateRequest,

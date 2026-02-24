@@ -142,11 +142,22 @@ class ATEService:
                 return execution
 
         if private_key:
+            # For connected wallets (agent key), pass account_address so the
+            # agent signs on behalf of the user's main Hyperliquid wallet.
+            # For generated wallets, wallet_address IS the trading wallet.
+            from app.models.enums import WalletType
+            account_address = (
+                user.wallet_address
+                if user.wallet_type == WalletType.CONNECTED
+                else None
+            )
+
             order_result = await self.hyperliquid.place_order(
                 wallet_private_key=private_key,
                 symbol=signal.symbol,
                 is_buy=is_buy,
                 size=quantity,
+                account_address=account_address,
                 order_type="market",
             )
 
@@ -334,11 +345,20 @@ class ATEService:
                 )
                 continue
 
+            # Determine account_address for agent wallet mode
+            from app.models.enums import WalletType
+            account_address = (
+                user.wallet_address
+                if user.wallet_type == WalletType.CONNECTED
+                else None
+            )
+
             close_result = await self.hyperliquid.close_position(
                 wallet_private_key=private_key,
                 symbol=symbol,
                 size=float(execution.quantity),
                 is_buy=is_buy,
+                account_address=account_address,
             )
 
             if close_result.get("success"):

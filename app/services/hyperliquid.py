@@ -74,20 +74,32 @@ class HyperliquidService:
         symbol: str,
         is_buy: bool,
         size: float,
+        account_address: str | None = None,
         price: float | None = None,
         order_type: str = "market",
         reduce_only: bool = False,
         slippage: float = 0.01,
     ) -> dict:
-        """Place an order on Hyperliquid.
+        """Place an order on Hyperliquid using the agent wallet pattern.
 
-        For live trading, this uses the Hyperliquid SDK.
-        Currently returns a structured response for the ATE to process.
+        Args:
+            wallet_private_key: The agent/API wallet private key (for signing).
+            symbol: Trading pair symbol (e.g. "ETH", "BTC").
+            is_buy: True for buy, False for sell.
+            size: Position size.
+            account_address: The user's main Hyperliquid wallet address.
+                If provided, trades on behalf of this account (agent wallet mode).
+                If None, trades directly from the signing wallet (generated wallet mode).
+            price: Limit price. If None, uses market price with slippage.
+            order_type: "market" or "limit".
+            reduce_only: If True, only reduces existing position.
+            slippage: Slippage tolerance for market orders (default 1%).
         """
         try:
-            from hyperliquid.utils import constants
+            from eth_account import Account
             from hyperliquid.exchange import Exchange
             from hyperliquid.info import Info
+            from hyperliquid.utils import constants
 
             base_url = (
                 constants.TESTNET_API_URL
@@ -95,10 +107,18 @@ class HyperliquidService:
                 else constants.MAINNET_API_URL
             )
 
+            # Create signing wallet from private key
+            key = wallet_private_key if wallet_private_key.startswith("0x") else f"0x{wallet_private_key}"
+            wallet = Account.from_key(key)
+
             info = Info(base_url, skip_ws=True)
+
+            # Agent wallet mode: sign with agent key, trade on behalf of account_address
+            # Generated wallet mode: sign and trade directly (no account_address)
             exchange = Exchange(
-                wallet=None,
+                wallet=wallet,
                 base_url=base_url,
+                account_address=account_address,
             )
 
             # Get current mid price for market orders
@@ -119,12 +139,28 @@ class HyperliquidService:
                 size,
                 price,
                 {"limit": {"tif": "Ioc"}} if order_type == "market" else {"limit": {"tif": "Gtc"}},
+                reduce_only=reduce_only,
             )
+
+            # Extract tx hash from response
+            tx_hash = None
+            statuses = (
+                order_result
+                .get("response", {})
+                .get("data", {})
+                .get("statuses", [])
+            )
+            if statuses:
+                first = statuses[0]
+                tx_hash = (
+                    first.get("resting", {}).get("oid")
+                    or first.get("filled", {}).get("oid")
+                )
 
             return {
                 "success": True,
                 "data": order_result,
-                "tx_hash": order_result.get("response", {}).get("data", {}).get("statuses", [{}])[0].get("resting", {}).get("oid"),
+                "tx_hash": tx_hash,
             }
 
         except ImportError:
@@ -144,12 +180,14 @@ class HyperliquidService:
         symbol: str,
         size: float,
         is_buy: bool,
+        account_address: str | None = None,
     ) -> dict:
         return await self.place_order(
             wallet_private_key=wallet_private_key,
             symbol=symbol,
             is_buy=not is_buy,
             size=size,
+            account_address=account_address,
             order_type="market",
             reduce_only=True,
         )

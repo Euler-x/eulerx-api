@@ -1,62 +1,62 @@
-.PHONY: help install install-dev run worker beat test coverage lint \
-       docker-up docker-down docker-build docker-logs \
+.PHONY: help install install-dev run worker beat test coverage lint format \
+       docker-up docker-down docker-build docker-logs docker-restart docker-ps \
        db-migrate db-upgrade db-downgrade db-history \
        clean
 
 # ── Defaults ────────────────────────────────────────────────
-PYTHON   ?= python
 APP       = app.main:app
 CELERY    = app.worker.celery_app
 QUEUES    = analysis,signals,execution,maintenance,notifications
 
+# ── Help ────────────────────────────────────────────────────
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-# ── Install ─────────────────────────────────────────────────
+# ── Install (uv) ───────────────────────────────────────────
 install: ## Install production dependencies
-	pip install --upgrade pip && pip install .
+	uv sync --no-dev
 
 install-dev: ## Install with dev dependencies
-	pip install --upgrade pip && pip install ".[dev]"
+	uv sync --all-extras
 
 # ── Local Dev ───────────────────────────────────────────────
 run: ## Start the API server (uvicorn, reload)
-	uvicorn $(APP) --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn $(APP) --reload --host 0.0.0.0 --port 8000
 
 worker: ## Start Celery worker
-	celery -A $(CELERY) worker -l info -Q $(QUEUES)
+	uv run celery -A $(CELERY) worker -l info -Q $(QUEUES)
 
 beat: ## Start Celery beat scheduler
-	celery -A $(CELERY) beat -l info
+	uv run celery -A $(CELERY) beat -l info
 
 # ── Testing ─────────────────────────────────────────────────
 test: ## Run tests
-	$(PYTHON) -m pytest tests/ -v
+	uv run pytest tests/ -v
 
 coverage: ## Run tests with coverage report
-	$(PYTHON) -m coverage run -m pytest tests/ -v && \
-	$(PYTHON) -m coverage report -m
+	uv run coverage run -m pytest tests/ -v && \
+	uv run coverage report -m
 
 # ── Linting ─────────────────────────────────────────────────
 lint: ## Run ruff linter
-	$(PYTHON) -m ruff check app/ tests/
+	uv run ruff check app/ tests/
 
 format: ## Auto-format with ruff
-	$(PYTHON) -m ruff format app/ tests/
+	uv run ruff format app/ tests/
 
 # ── Database (Alembic) ──────────────────────────────────────
 db-migrate: ## Create a new migration (usage: make db-migrate msg="add users table")
-	alembic revision --autogenerate -m "$(msg)"
+	uv run alembic revision --autogenerate -m "$(msg)"
 
 db-upgrade: ## Apply all pending migrations
-	alembic upgrade head
+	uv run alembic upgrade head
 
 db-downgrade: ## Rollback one migration
-	alembic downgrade -1
+	uv run alembic downgrade -1
 
 db-history: ## Show migration history
-	alembic history --verbose
+	uv run alembic history --verbose
 
 # ── Docker ──────────────────────────────────────────────────
 docker-build: ## Build all Docker images

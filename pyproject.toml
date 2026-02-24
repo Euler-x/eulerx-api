@@ -24,9 +24,10 @@ dependencies = [
     "celery[redis]>=5.4.0",
     "redis>=5.0.0",
     "email-validator>=2.0.0",
-    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.0.0",
     "prometheus-fastapi-instrumentator>=7.0.0",
     "sentry-sdk[fastapi]>=2.0.0",
+    "websockets>=15.0",
 ]
 
 [project.optional-dependencies]

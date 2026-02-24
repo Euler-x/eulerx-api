@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     nowpayments_base_url: str = "https://api.nowpayments.io/v1"
 
     # CORS
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3002"
 
     @property
     def cors_origin_list(self) -> list[str]:

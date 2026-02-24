@@ -18,6 +18,7 @@ from app.routers import (
     billing,
     execution,
     learning,
+    market,
     signals,
     strategies,
     support,
@@ -95,10 +96,15 @@ async def lifespan(app: FastAPI):
     await check_db_connection()
     logger.info("Database connection verified")
 
+    # Start the Hyperliquid market data WebSocket stream
+    from app.services.market_ws import market_data_manager
+    await market_data_manager.start()
+
     yield
 
     # Shutdown
     logger.info("Shutting down EulerX Network Backend...")
+    await market_data_manager.stop()
     await dispose_engine()
 
 
@@ -211,6 +217,7 @@ app.include_router(
 app.include_router(strategies.router, prefix=prefix)
 app.include_router(signals.router, prefix=prefix)
 app.include_router(execution.router, prefix=prefix)
+app.include_router(market.router, prefix=prefix)
 app.include_router(transactions.router, prefix=prefix)
 app.include_router(billing.router, prefix=prefix)
 app.include_router(ambassador.router, prefix=prefix)

@@ -29,6 +29,9 @@ class User(Base, TimestampMixin):
     wallet_address_hash: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, nullable=True, index=True
     )
+    wallet_address: Mapped[Optional[str]] = mapped_column(
+        String(42), nullable=True
+    )
     wallet_type: Mapped[Optional[WalletType]] = mapped_column(
         SAEnum(WalletType, name="wallet_type_enum"), nullable=True
     )

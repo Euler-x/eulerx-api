@@ -8,9 +8,15 @@ from app.models.enums import WalletType
 
 
 class WalletConnectRequest(BaseModel):
-    wallet_address: str = Field(..., min_length=42, max_length=42, pattern=r"^0x[0-9a-fA-F]{40}$")
-    message: str = Field(..., min_length=1)
-    signature: str = Field(..., min_length=1)
+    """Connect a Hyperliquid wallet using an Agent/API wallet key."""
+    wallet_address: str = Field(
+        ..., min_length=42, max_length=42, pattern=r"^0x[0-9a-fA-F]{40}$",
+        description="Your Hyperliquid wallet address (main account)",
+    )
+    agent_private_key: str = Field(
+        ..., min_length=1,
+        description="Agent/API wallet private key (created at app.hyperliquid.xyz/API)",
+    )
 
 
 class WalletGenerateRequest(BaseModel):
@@ -61,10 +67,6 @@ class WalletGenerateResponse(BaseModel):
     )
     auth: AuthResponse
 
-
-class SignMessageResponse(BaseModel):
-    message: str
-    wallet_address: str
 
 
 class EmailSubmitRequest(BaseModel):

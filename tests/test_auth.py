@@ -5,50 +5,29 @@ from unittest.mock import patch
 
 
 @pytest.mark.asyncio
-async def test_get_sign_message(client):
-    """GET /auth/sign-message returns a message for the wallet."""
-    wallet = "0x" + "a" * 40
-    response = await client.get(f"/api/v1/auth/sign-message?wallet_address={wallet}")
-    assert response.status_code == 200
-    data = response.json()
-    assert "message" in data
-    assert wallet in data["message"]
-
-
-@pytest.mark.asyncio
-async def test_sign_message_invalid_address(client):
-    """Short wallet address rejected."""
-    response = await client.get("/api/v1/auth/sign-message?wallet_address=0x123")
-    assert response.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_connect_wallet_invalid_signature(client):
-    """POST /auth/connect with bad signature returns 401."""
-    with patch("app.routers.auth.WalletService.verify_signature", return_value=False):
+async def test_connect_wallet_invalid_agent_key(client):
+    """POST /auth/connect with invalid agent key returns 400."""
+    with patch("app.routers.auth.WalletService.validate_private_key", return_value=None):
         response = await client.post(
             "/api/v1/auth/connect",
             json={
                 "wallet_address": "0x" + "a" * 40,
-                "message": "Sign this message...",
-                "signature": "0x" + "f" * 130,
+                "agent_private_key": "invalid_key",
             },
         )
-        assert response.status_code == 401
+        assert response.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_connect_wallet_valid_signature(client):
-    """POST /auth/connect with valid signature returns tokens."""
-    with patch("app.routers.auth.WalletService.verify_signature", return_value=True), \
-         patch("app.routers.auth.WalletService.hash_address", return_value="c" * 64), \
-         patch("app.services.notifications.NotificationService.send_welcome_email"):
+async def test_connect_wallet_valid_agent_key(client):
+    """POST /auth/connect with valid agent key returns tokens."""
+    agent_addr = "0x" + "b" * 40
+    with patch("app.routers.auth.WalletService.validate_private_key", return_value=agent_addr):
         response = await client.post(
             "/api/v1/auth/connect",
             json={
                 "wallet_address": "0x" + "c" * 40,
-                "message": "Sign this message...",
-                "signature": "0x" + "d" * 130,
+                "agent_private_key": "0x" + "a" * 64,
             },
         )
         assert response.status_code == 200

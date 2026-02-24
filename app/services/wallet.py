@@ -1,10 +1,11 @@
+from typing import Optional
+
 from eth_account import Account
 
 from app.utils.security import (
     decrypt_private_key,
     encrypt_private_key,
     hash_wallet_address,
-    verify_wallet_signature,
 )
 
 
@@ -30,10 +31,17 @@ class WalletService:
         return hash_wallet_address(address)
 
     @staticmethod
-    def verify_signature(
-        wallet_address: str, message: str, signature: str
-    ) -> bool:
-        return verify_wallet_signature(wallet_address, message, signature)
+    def validate_private_key(private_key: str) -> Optional[str]:
+        """Validate an Ethereum private key and return its derived address.
+
+        Returns the address if valid, None if invalid.
+        """
+        try:
+            key = private_key if private_key.startswith("0x") else f"0x{private_key}"
+            account = Account.from_key(key)
+            return account.address
+        except Exception:
+            return None
 
     @staticmethod
     def decrypt_key(encrypted_key: str) -> str:

@@ -1,0 +1,20 @@
+[Unit]
+Description=EulerX Celery Beat Scheduler
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+User=eulerx
+Group=eulerx
+WorkingDirectory=/home/eulerx/eulerx-api/backend
+Environment="PATH=/home/eulerx/eulerx-api/backend/.venv/bin:/home/eulerx/.local/bin:/usr/bin"
+ExecStart=/home/eulerx/eulerx-api/backend/.venv/bin/celery -A app.worker.celery_app:celery_app beat \
+    --loglevel=info \
+    --logfile=/var/log/eulerx/celery-beat.log
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/eulerx/celery-beat.log
+StandardError=append:/var/log/eulerx/celery-beat-error.log
+
+[Install]
+WantedBy=multi-user.target

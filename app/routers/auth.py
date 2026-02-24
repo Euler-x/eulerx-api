@@ -1,4 +1,3 @@
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,7 +16,6 @@ from app.models.schemas.auth import (
     LoginRequest,
     RefreshTokenRequest,
     RegisterRequest,
-    SignMessageResponse,
     UserResponse,
     WalletConnectRequest,
     WalletGenerateRequest,
@@ -30,8 +28,9 @@ from app.utils.helpers import generate_referral_code, utc_now
 from app.utils.security import (
     create_access_token,
     create_refresh_token,
-    generate_sign_message,
+    encrypt_private_key,
     hash_password,
+    hash_wallet_address,
     verify_password,
     verify_token,
 )
@@ -136,7 +135,7 @@ async def login(
     )
 
 
-# ── Wallet Authentication ────────────────────────────────────────
+# ── Hyperliquid Wallet Connection ────────────────────────────────
 
 
 @router.post("/connect", response_model=AuthResponse)
@@ -145,15 +144,21 @@ async def connect_wallet(
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ):
-    if not WalletService.verify_signature(
-        request.wallet_address, request.message, request.signature
-    ):
+    """Connect a Hyperliquid wallet using an Agent/API wallet private key.
+
+    The agent key is created by the user at https://app.hyperliquid.xyz/API.
+    Agent wallets can only execute trades — they cannot withdraw funds.
+    """
+    # Validate that the agent key is a valid Ethereum private key
+    agent_address = WalletService.validate_private_key(request.agent_private_key)
+    if not agent_address:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid wallet signature",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid agent private key. Please check the key and try again.",
         )
 
-    address_hash = WalletService.hash_address(request.wallet_address)
+    address_hash = hash_wallet_address(request.wallet_address)
+    encrypted_agent_key = encrypt_private_key(request.agent_private_key)
 
     # Check if wallet is already linked to another user
     result = await db.execute(
@@ -173,18 +178,25 @@ async def connect_wallet(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A wallet is already connected to your account.",
             )
+        current_user.wallet_address = request.wallet_address
         current_user.wallet_address_hash = address_hash
         current_user.wallet_type = WalletType.CONNECTED
+        current_user.encrypted_private_key = encrypted_agent_key
         await db.flush()
         user = current_user
     elif existing_wallet_user is not None:
-        # Existing wallet-only user logging in
+        # Existing wallet user — update agent key
+        existing_wallet_user.encrypted_private_key = encrypted_agent_key
+        existing_wallet_user.wallet_address = request.wallet_address
+        await db.flush()
         user = existing_wallet_user
     else:
-        # New wallet-only user (legacy flow)
+        # New wallet-only user
         user = User(
+            wallet_address=request.wallet_address,
             wallet_address_hash=address_hash,
             wallet_type=WalletType.CONNECTED,
+            encrypted_private_key=encrypted_agent_key,
         )
         db.add(user)
         await db.flush()
@@ -207,6 +219,7 @@ async def generate_wallet(
     wallet_data = WalletService.generate_wallet()
 
     user = User(
+        wallet_address=wallet_data["address"],
         wallet_address_hash=wallet_data["address_hash"],
         wallet_type=WalletType.GENERATED,
         encrypted_private_key=wallet_data["encrypted_private_key"],
@@ -296,17 +309,6 @@ async def refresh_token(
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
-
-
-@router.get("/sign-message", response_model=SignMessageResponse)
-async def get_sign_message(wallet_address: str):
-    if not re.fullmatch(r"0x[0-9a-fA-F]{40}", wallet_address):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid wallet address format",
-        )
-    message = generate_sign_message(wallet_address)
-    return SignMessageResponse(message=message, wallet_address=wallet_address)
 
 
 # ── Email Verification ───────────────────────────────────────────

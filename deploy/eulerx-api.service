@@ -1,0 +1,26 @@
+[Unit]
+Description=EulerX API (Gunicorn + Uvicorn)
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+User=eulerx
+Group=eulerx
+WorkingDirectory=/home/eulerx/eulerx-api/backend
+Environment="PATH=/home/eulerx/eulerx-api/backend/.venv/bin:/home/eulerx/.local/bin:/usr/bin"
+ExecStart=/home/eulerx/eulerx-api/backend/.venv/bin/gunicorn app.main:app \
+    --workers 4 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    --graceful-timeout 30 \
+    --access-logfile /var/log/eulerx/access.log \
+    --error-logfile /var/log/eulerx/error.log \
+    --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/eulerx/api.log
+StandardError=append:/var/log/eulerx/api-error.log
+
+[Install]
+WantedBy=multi-user.target

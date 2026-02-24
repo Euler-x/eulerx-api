@@ -1,0 +1,23 @@
+[Unit]
+Description=EulerX Celery Worker
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+User=eulerx
+Group=eulerx
+WorkingDirectory=/home/eulerx/eulerx-api/backend
+Environment="PATH=/home/eulerx/eulerx-api/backend/.venv/bin:/home/eulerx/.local/bin:/usr/bin"
+ExecStart=/home/eulerx/eulerx-api/backend/.venv/bin/celery -A app.worker.celery_app:celery_app worker \
+    --loglevel=info \
+    --concurrency=4 \
+    --queues=analysis,signals,execution,maintenance,notifications \
+    --max-tasks-per-child=50 \
+    --logfile=/var/log/eulerx/celery-worker.log
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/eulerx/celery-worker.log
+StandardError=append:/var/log/eulerx/celery-worker-error.log
+
+[Install]
+WantedBy=multi-user.target
