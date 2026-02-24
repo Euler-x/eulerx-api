@@ -94,7 +94,7 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Starting EulerX Network Backend...")
+    logger.info("Starting EulerX  Backend...")
     # Hard failure: if DB is unreachable the process must not start.
     await check_db_connection()
     logger.info("Database connection verified")
@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Shutting down EulerX Network Backend...")
+    logger.info("Shutting down EulerX  Backend...")
     await market_data_manager.stop()
     await dispose_engine()
 

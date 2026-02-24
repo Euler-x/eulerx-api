@@ -11,7 +11,10 @@ from app.models.schemas.ambassador import (
     ReferralResponse,
 )
 from app.models.user import User
+from app.config import get_settings
 from app.utils.helpers import generate_referral_code
+
+settings = get_settings()
 
 router = APIRouter(prefix="/ambassador", tags=["Ambassador"])
 
@@ -74,7 +77,7 @@ async def generate_referral(
 
     return ReferralResponse(
         referral_code=ambassador.referral_code,
-        referral_link=f"https://eulerx.network/ref/{ambassador.referral_code}",
+        referral_link=f"{settings.frontend_url}/ref/{ambassador.referral_code}",
     )
 
 

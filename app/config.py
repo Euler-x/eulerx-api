@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "EulerX Network"
+    app_name: str = "EulerX "
     app_version: str = "0.1.0"
     debug: bool = False
     environment: str = Field(
@@ -144,11 +144,11 @@ class Settings(BaseSettings):
         description="ZeptoMail API token (Zoho-enczapikey)",
     )
     zeptomail_from_email: str = Field(
-        default="noreply@eulerx.network",
+        default="noreply@eulerx.io",
         description="Sender email address for transactional emails",
     )
     zeptomail_from_name: str = Field(
-        default="EulerX Network",
+        default="EulerX ",
         description="Sender display name for transactional emails",
     )
     email_verification_expiry_minutes: int = Field(
@@ -156,7 +156,7 @@ class Settings(BaseSettings):
         description="How long email verification codes are valid (minutes)",
     )
     frontend_url: str = Field(
-        default="https://app.eulerx.network",
+        default="https://eulerx.io",
         description="Frontend URL for email links",
     )
 
