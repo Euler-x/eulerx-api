@@ -62,7 +62,9 @@ class TransparencyService:
                 continue
 
             leverage_info = pos.get("leverage", {})
-            leverage_val = leverage_info.get("value", 1) if isinstance(leverage_info, dict) else 1
+            leverage_val = (
+                leverage_info.get("value", 1) if isinstance(leverage_info, dict) else 1
+            )
 
             result.append(
                 {

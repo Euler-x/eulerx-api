@@ -63,9 +63,11 @@ async def get_wallet_info(
 
     address = current_user.wallet_address
     masked = f"{address[:6]}...{address[-4:]}" if len(address) > 10 else address
-    wallet_type = (current_user.wallet_type or "connected").value if hasattr(
-        current_user.wallet_type, "value"
-    ) else str(current_user.wallet_type or "connected")
+    wallet_type = (
+        (current_user.wallet_type or "connected").value
+        if hasattr(current_user.wallet_type, "value")
+        else str(current_user.wallet_type or "connected")
+    )
 
     permissions = TransparencyService.get_agent_key_permissions(wallet_type)
     explorer_link = TransparencyService.get_explorer_link(address)

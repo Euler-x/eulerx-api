@@ -22,7 +22,10 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Create the strategy_timeframe_enum type
     strategy_timeframe_enum = sa.Enum(
-        "scalping", "intraday", "swing", "position",
+        "scalping",
+        "intraday",
+        "swing",
+        "position",
         name="strategy_timeframe_enum",
     )
     strategy_timeframe_enum.create(op.get_bind(), checkfirst=True)
@@ -47,7 +50,10 @@ def upgrade() -> None:
         sa.Column(
             "timeframe",
             sa.Enum(
-                "scalping", "intraday", "swing", "position",
+                "scalping",
+                "intraday",
+                "swing",
+                "position",
                 name="strategy_timeframe_enum",
                 create_type=False,
             ),
