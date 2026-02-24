@@ -256,9 +256,18 @@ async def health_check():
     except Exception:
         db_ok = False
 
+    redis_ok = True
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
+        await r.ping()
+        await r.aclose()
+    except Exception:
+        redis_ok = False
+
     return {
         "status": "ok",
         "version": settings.app_version,
         "db_status": "ok" if db_ok else "unavailable",
-        "redis_status": "unknown",
+        "redis_status": "ok" if redis_ok else "unavailable",
     }
