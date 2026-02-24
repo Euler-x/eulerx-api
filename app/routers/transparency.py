@@ -12,7 +12,6 @@ from app.models.schemas.transparency import (
 from app.models.strategy import Strategy
 from app.models.user import User
 from app.services.transparency import TransparencyService
-from app.utils.security import hash_wallet_address
 
 router = APIRouter(prefix="/transparency", tags=["Transparency"])
 
