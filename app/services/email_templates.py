@@ -140,7 +140,9 @@ def signal_generated(
     signal_count: int,
 ) -> tuple[str, str]:
     """Signals generated notification."""
-    subject = f"{signal_count} New Signal{'s' if signal_count != 1 else ''} — {strategy_name}"
+    subject = (
+        f"{signal_count} New Signal{'s' if signal_count != 1 else ''} — {strategy_name}"
+    )
     body = _load("signal_generated").format(
         strategy_name=strategy_name,
         signal_count=signal_count,

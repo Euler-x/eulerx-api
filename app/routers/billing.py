@@ -1,5 +1,3 @@
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +7,6 @@ from app.middleware.auth import require_verified_email
 from app.models.billing import Payment, Plan, Subscription
 from app.models.enums import PlanStatus, SubscriptionStatus
 from app.models.schemas.billing import (
-    NOWPaymentsWebhook,
     PaymentResponse,
     PlanResponse,
     SubscribeRequest,
@@ -52,10 +49,12 @@ async def subscribe_to_plan(
     existing_result = await db.execute(
         select(Subscription).where(
             Subscription.user_id == current_user.id,
-            Subscription.status.in_([
-                SubscriptionStatus.ACTIVE,
-                SubscriptionStatus.PENDING_PAYMENT,
-            ]),
+            Subscription.status.in_(
+                [
+                    SubscriptionStatus.ACTIVE,
+                    SubscriptionStatus.PENDING_PAYMENT,
+                ]
+            ),
         )
     )
     existing = existing_result.scalar_one_or_none()
@@ -109,9 +108,7 @@ async def get_current_subscription(
     if subscription is None:
         return None
 
-    plan_result = await db.execute(
-        select(Plan).where(Plan.id == subscription.plan_id)
-    )
+    plan_result = await db.execute(select(Plan).where(Plan.id == subscription.plan_id))
     plan = plan_result.scalar_one_or_none()
 
     response = SubscriptionResponse.model_validate(subscription)

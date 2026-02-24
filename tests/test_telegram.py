@@ -12,19 +12,25 @@ from app.utils.security import decrypt_telegram_token
 @pytest.mark.asyncio
 async def test_save_telegram_config_valid(client, test_user):
     """PUT /telegram/config with valid token: validates, tests, encrypts, saves."""
-    with patch(
-        "app.routers.telegram.NotificationService.validate_telegram_bot",
-        new_callable=AsyncMock,
-        return_value=(True, "eulerx_bot"),
-    ), patch(
-        "app.routers.telegram.NotificationService.send_telegram",
-        new_callable=AsyncMock,
-        return_value=True,
+    with (
+        patch(
+            "app.routers.telegram.NotificationService.validate_telegram_bot",
+            new_callable=AsyncMock,
+            return_value=(True, "eulerx_bot"),
+        ),
+        patch(
+            "app.routers.telegram.NotificationService.send_telegram",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
     ):
         response = await client.put(
             "/api/v1/telegram/config",
             headers=test_user["headers"],
-            json={"bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", "chat_id": "987654321"},
+            json={
+                "bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+                "chat_id": "987654321",
+            },
         )
 
     assert response.status_code == 200
@@ -44,7 +50,10 @@ async def test_save_telegram_config_invalid_token(client, test_user):
         response = await client.put(
             "/api/v1/telegram/config",
             headers=test_user["headers"],
-            json={"bot_token": "invalid-token-that-is-at-least-30-chars", "chat_id": "123"},
+            json={
+                "bot_token": "invalid-token-that-is-at-least-30-chars",
+                "chat_id": "123",
+            },
         )
 
     assert response.status_code == 400
@@ -54,19 +63,25 @@ async def test_save_telegram_config_invalid_token(client, test_user):
 @pytest.mark.asyncio
 async def test_save_telegram_config_bad_chat_id(client, test_user):
     """PUT /telegram/config: valid token but unreachable chat_id returns 400."""
-    with patch(
-        "app.routers.telegram.NotificationService.validate_telegram_bot",
-        new_callable=AsyncMock,
-        return_value=(True, "test_bot"),
-    ), patch(
-        "app.routers.telegram.NotificationService.send_telegram",
-        new_callable=AsyncMock,
-        return_value=False,
+    with (
+        patch(
+            "app.routers.telegram.NotificationService.validate_telegram_bot",
+            new_callable=AsyncMock,
+            return_value=(True, "test_bot"),
+        ),
+        patch(
+            "app.routers.telegram.NotificationService.send_telegram",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
     ):
         response = await client.put(
             "/api/v1/telegram/config",
             headers=test_user["headers"],
-            json={"bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", "chat_id": "000"},
+            json={
+                "bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+                "chat_id": "000",
+            },
         )
 
     assert response.status_code == 400
@@ -78,14 +93,17 @@ async def test_token_encrypted_at_rest(client, test_user):
     """After saving config, the stored token is Fernet-encrypted (not plaintext)."""
     plain_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 
-    with patch(
-        "app.routers.telegram.NotificationService.validate_telegram_bot",
-        new_callable=AsyncMock,
-        return_value=(True, "test_bot"),
-    ), patch(
-        "app.routers.telegram.NotificationService.send_telegram",
-        new_callable=AsyncMock,
-        return_value=True,
+    with (
+        patch(
+            "app.routers.telegram.NotificationService.validate_telegram_bot",
+            new_callable=AsyncMock,
+            return_value=(True, "test_bot"),
+        ),
+        patch(
+            "app.routers.telegram.NotificationService.send_telegram",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
     ):
         response = await client.put(
             "/api/v1/telegram/config",
@@ -100,9 +118,7 @@ async def test_token_encrypted_at_rest(client, test_user):
     from app.models.user import User
 
     async with TestSessionFactory() as session:
-        result = await session.execute(
-            select(User).where(User.id == test_user["id"])
-        )
+        result = await session.execute(select(User).where(User.id == test_user["id"]))
         user = result.scalar_one()
         stored_token = user.telegram_bot_token
 

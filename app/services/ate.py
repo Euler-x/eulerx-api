@@ -41,7 +41,10 @@ class ATEService:
             return False, "Signal is HOLD"
 
         if signal.confidence < settings.ate_confidence_threshold:
-            return False, f"Confidence {signal.confidence} below threshold {settings.ate_confidence_threshold}"
+            return (
+                False,
+                f"Confidence {signal.confidence} below threshold {settings.ate_confidence_threshold}",
+            )
 
         if signal.status != SignalStatus.NEW:
             return False, f"Signal status is {signal.status.value}, expected NEW"
@@ -90,10 +93,12 @@ class ATEService:
             select(func.count(Execution.id)).where(
                 Execution.user_id == user.id,
                 Execution.strategy_id == strategy.id,
-                Execution.status.in_([
-                    ExecutionStatus.PENDING,
-                    ExecutionStatus.FILLED,
-                ]),
+                Execution.status.in_(
+                    [
+                        ExecutionStatus.PENDING,
+                        ExecutionStatus.FILLED,
+                    ]
+                ),
             )
         )
         open_count = result.scalar() or 0
@@ -146,6 +151,7 @@ class ATEService:
             # agent signs on behalf of the user's main Hyperliquid wallet.
             # For generated wallets, wallet_address IS the trading wallet.
             from app.models.enums import WalletType
+
             account_address = (
                 user.wallet_address
                 if user.wallet_type == WalletType.CONNECTED
@@ -347,6 +353,7 @@ class ATEService:
 
             # Determine account_address for agent wallet mode
             from app.models.enums import WalletType
+
             account_address = (
                 user.wallet_address
                 if user.wallet_type == WalletType.CONNECTED
@@ -398,14 +405,16 @@ class ATEService:
                 except Exception as e:
                     logger.error("Failed to send %s notification: %s", triggered, e)
 
-                closed.append({
-                    "execution_id": str(execution.id),
-                    "symbol": symbol,
-                    "triggered": triggered,
-                    "entry_price": entry_price,
-                    "exit_price": current_price,
-                    "pnl": float(execution.pnl),
-                })
+                closed.append(
+                    {
+                        "execution_id": str(execution.id),
+                        "symbol": symbol,
+                        "triggered": triggered,
+                        "entry_price": entry_price,
+                        "exit_price": current_price,
+                        "pnl": float(execution.pnl),
+                    }
+                )
 
                 logger.info(
                     "%s hit for %s: entry=%.4f exit=%.4f pnl=%s",

@@ -21,9 +21,7 @@ from sqlalchemy import ForeignKey
 class Signal(Base, TimestampMixin):
     __tablename__ = "signals"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     strategy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("strategies.id", ondelete="SET NULL"),
@@ -61,6 +59,4 @@ class Signal(Base, TimestampMixin):
         back_populates="signal", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (
-        Index("ix_signals_status_created", "status", "created_at"),
-    )
+    __table_args__ = (Index("ix_signals_status_created", "status", "created_at"),)

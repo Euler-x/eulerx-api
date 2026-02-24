@@ -193,7 +193,9 @@ async def test_monitor_positions_sl_hit(setup_db, mock_hyperliquid_api):
             await session.commit()
 
     assert len(results) >= 1
-    sl_results = [r for r in results if r["triggered"] == "stop_loss" and r["symbol"] == "ETH"]
+    sl_results = [
+        r for r in results if r["triggered"] == "stop_loss" and r["symbol"] == "ETH"
+    ]
     assert len(sl_results) == 1
     assert sl_results[0]["pnl"] < 0  # Loss on SELL when price goes up
 

@@ -56,21 +56,30 @@ class TestRateLimiting:
     def test_allowed_within_limit(self):
         user = _make_user()
         for _ in range(10):
-            assert NotificationService._check_notification_rate(user, "trade_executed") is True
+            assert (
+                NotificationService._check_notification_rate(user, "trade_executed")
+                is True
+            )
 
     def test_blocked_over_limit(self):
         user = _make_user()
         for _ in range(10):
             NotificationService._check_notification_rate(user, "signal_generated")
         # 11th should be blocked
-        assert NotificationService._check_notification_rate(user, "signal_generated") is False
+        assert (
+            NotificationService._check_notification_rate(user, "signal_generated")
+            is False
+        )
 
     def test_different_types_independent(self):
         user = _make_user()
         for _ in range(10):
             NotificationService._check_notification_rate(user, "trade_executed")
         # Different type should still be allowed
-        assert NotificationService._check_notification_rate(user, "signal_generated") is True
+        assert (
+            NotificationService._check_notification_rate(user, "signal_generated")
+            is True
+        )
 
     def test_different_users_independent(self):
         user1 = _make_user()
@@ -78,7 +87,10 @@ class TestRateLimiting:
         for _ in range(10):
             NotificationService._check_notification_rate(user1, "trade_executed")
         # Different user should still be allowed
-        assert NotificationService._check_notification_rate(user2, "trade_executed") is True
+        assert (
+            NotificationService._check_notification_rate(user2, "trade_executed")
+            is True
+        )
 
 
 class TestTelegramTokenDecryption:
@@ -109,8 +121,12 @@ class TestValidateTelegramBot:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"ok": True, "result": {"username": "my_bot"}}
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_resp):
-            is_valid, info = await NotificationService.validate_telegram_bot("123:token")
+        with patch(
+            "httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_resp
+        ):
+            is_valid, info = await NotificationService.validate_telegram_bot(
+                "123:token"
+            )
 
         assert is_valid is True
         assert info == "my_bot"
@@ -121,8 +137,12 @@ class TestValidateTelegramBot:
         mock_resp.status_code = 401
         mock_resp.json.return_value = {"ok": False, "description": "Unauthorized"}
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_resp):
-            is_valid, info = await NotificationService.validate_telegram_bot("bad:token")
+        with patch(
+            "httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_resp
+        ):
+            is_valid, info = await NotificationService.validate_telegram_bot(
+                "bad:token"
+            )
 
         assert is_valid is False
         assert "Unauthorized" in info
@@ -145,8 +165,10 @@ class TestDispatchWithPreferences:
             notification_preferences={"trades_telegram": False},
         )
 
-        with patch.object(service, "send_email", new_callable=AsyncMock) as mock_email, \
-             patch.object(service, "send_telegram", new_callable=AsyncMock) as mock_tg:
+        with (
+            patch.object(service, "send_email", new_callable=AsyncMock) as mock_email,
+            patch.object(service, "send_telegram", new_callable=AsyncMock) as mock_tg,
+        ):
             mock_email.return_value = True
             mock_tg.return_value = True
 
@@ -180,8 +202,10 @@ class TestDispatchWithPreferences:
             },
         )
 
-        with patch.object(service, "send_email", new_callable=AsyncMock) as mock_email, \
-             patch.object(service, "send_telegram", new_callable=AsyncMock) as mock_tg:
+        with (
+            patch.object(service, "send_email", new_callable=AsyncMock) as mock_email,
+            patch.object(service, "send_telegram", new_callable=AsyncMock) as mock_tg,
+        ):
             mock_email.return_value = True
             mock_tg.return_value = True
 

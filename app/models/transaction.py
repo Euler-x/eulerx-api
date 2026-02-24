@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 class Transaction(Base, TimestampMixin):
     __tablename__ = "transactions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="CASCADE"),

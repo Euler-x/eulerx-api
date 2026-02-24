@@ -1,6 +1,5 @@
 """Market data endpoints — WebSocket stream and REST fallback."""
 
-import asyncio
 import json
 import logging
 

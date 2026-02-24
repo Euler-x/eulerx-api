@@ -47,9 +47,7 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new user with email and password."""
-    existing = await db.execute(
-        select(User).where(User.email == request.email)
-    )
+    existing = await db.execute(select(User).where(User.email == request.email))
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,9 +65,7 @@ async def register(
     # Handle referral
     if request.referral_code:
         ref_result = await db.execute(
-            select(Ambassador).where(
-                Ambassador.referral_code == request.referral_code
-            )
+            select(Ambassador).where(Ambassador.referral_code == request.referral_code)
         )
         referrer = ref_result.scalar_one_or_none()
         if referrer:
@@ -102,9 +98,7 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """Login with email and password."""
-    result = await db.execute(
-        select(User).where(User.email == request.email)
-    )
+    result = await db.execute(select(User).where(User.email == request.email))
     user = result.scalar_one_or_none()
 
     if user is None or not user.password_hash:
@@ -173,7 +167,10 @@ async def connect_wallet(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This wallet is already linked to another account.",
             )
-        if current_user.wallet_address_hash and current_user.wallet_address_hash != address_hash:
+        if (
+            current_user.wallet_address_hash
+            and current_user.wallet_address_hash != address_hash
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A wallet is already connected to your account.",
@@ -230,9 +227,7 @@ async def generate_wallet(
     # Handle referral
     if request.referral_code:
         ref_result = await db.execute(
-            select(Ambassador).where(
-                Ambassador.referral_code == request.referral_code
-            )
+            select(Ambassador).where(Ambassador.referral_code == request.referral_code)
         )
         referrer = ref_result.scalar_one_or_none()
         if referrer:
@@ -285,9 +280,7 @@ async def refresh_token(
         ) from e
 
     user_id = payload.get("sub")
-    result = await db.execute(
-        select(User).where(User.id == uuid.UUID(user_id))
-    )
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
     user = result.scalar_one_or_none()
 
     if user is None:

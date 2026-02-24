@@ -50,10 +50,12 @@ async def get_subscription_info(
         .options(selectinload(Subscription.plan))
         .where(Subscription.user_id == current_user.id)
         .where(
-            Subscription.status.in_([
-                SubscriptionStatus.ACTIVE,
-                SubscriptionStatus.EXPIRING_SOON,
-            ])
+            Subscription.status.in_(
+                [
+                    SubscriptionStatus.ACTIVE,
+                    SubscriptionStatus.EXPIRING_SOON,
+                ]
+            )
         )
         .order_by(Subscription.created_at.desc())
         .limit(1)

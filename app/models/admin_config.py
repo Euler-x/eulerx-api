@@ -13,9 +13,7 @@ from app.db.base import Base
 class AdminConfig(Base):
     __tablename__ = "admin_config"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     value: Mapped[dict] = mapped_column(JSON, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

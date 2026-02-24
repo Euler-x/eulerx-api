@@ -61,9 +61,7 @@ async def admin_get_execution(
     execution_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Execution).where(Execution.id == execution_id)
-    )
+    result = await db.execute(select(Execution).where(Execution.id == execution_id))
     execution = result.scalar_one_or_none()
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")

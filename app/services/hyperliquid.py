@@ -38,12 +38,14 @@ class HyperliquidService:
             symbol = asset_info.get("name", "")
             mid_price = mids.get(symbol)
             if mid_price:
-                symbols.append({
-                    "symbol": symbol,
-                    "name": asset_info.get("name", ""),
-                    "szDecimals": asset_info.get("szDecimals", 0),
-                    "mid_price": float(mid_price),
-                })
+                symbols.append(
+                    {
+                        "symbol": symbol,
+                        "name": asset_info.get("name", ""),
+                        "szDecimals": asset_info.get("szDecimals", 0),
+                        "mid_price": float(mid_price),
+                    }
+                )
         return symbols
 
     async def get_top_gainers(self, limit: int = 20) -> list[dict]:
@@ -55,17 +57,23 @@ class HyperliquidService:
             return []
 
     async def get_user_state(self, wallet_address: str) -> dict:
-        data = await self._post("/info", {
-            "type": "clearinghouseState",
-            "user": wallet_address,
-        })
+        data = await self._post(
+            "/info",
+            {
+                "type": "clearinghouseState",
+                "user": wallet_address,
+            },
+        )
         return data
 
     async def get_open_orders(self, wallet_address: str) -> list[dict]:
-        data = await self._post("/info", {
-            "type": "openOrders",
-            "user": wallet_address,
-        })
+        data = await self._post(
+            "/info",
+            {
+                "type": "openOrders",
+                "user": wallet_address,
+            },
+        )
         return data
 
     async def place_order(
@@ -108,7 +116,11 @@ class HyperliquidService:
             )
 
             # Create signing wallet from private key
-            key = wallet_private_key if wallet_private_key.startswith("0x") else f"0x{wallet_private_key}"
+            key = (
+                wallet_private_key
+                if wallet_private_key.startswith("0x")
+                else f"0x{wallet_private_key}"
+            )
             wallet = Account.from_key(key)
 
             info = Info(base_url, skip_ws=True)
@@ -138,24 +150,22 @@ class HyperliquidService:
                 is_buy,
                 size,
                 price,
-                {"limit": {"tif": "Ioc"}} if order_type == "market" else {"limit": {"tif": "Gtc"}},
+                {"limit": {"tif": "Ioc"}}
+                if order_type == "market"
+                else {"limit": {"tif": "Gtc"}},
                 reduce_only=reduce_only,
             )
 
             # Extract tx hash from response
             tx_hash = None
             statuses = (
-                order_result
-                .get("response", {})
-                .get("data", {})
-                .get("statuses", [])
+                order_result.get("response", {}).get("data", {}).get("statuses", [])
             )
             if statuses:
                 first = statuses[0]
-                tx_hash = (
-                    first.get("resting", {}).get("oid")
-                    or first.get("filled", {}).get("oid")
-                )
+                tx_hash = first.get("resting", {}).get("oid") or first.get(
+                    "filled", {}
+                ).get("oid")
 
             return {
                 "success": True,
@@ -164,7 +174,9 @@ class HyperliquidService:
             }
 
         except ImportError:
-            logger.warning("Hyperliquid SDK not fully configured. Returning mock response.")
+            logger.warning(
+                "Hyperliquid SDK not fully configured. Returning mock response."
+            )
             return {
                 "success": False,
                 "error": "Hyperliquid SDK not configured for live trading",

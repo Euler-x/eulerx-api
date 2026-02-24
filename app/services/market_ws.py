@@ -43,7 +43,9 @@ class MarketDataManager:
 
     def __init__(self) -> None:
         self._ws_url = _WS_TESTNET if settings.hyperliquid_testnet else _WS_MAINNET
-        self._rest_url = _REST_TESTNET if settings.hyperliquid_testnet else _REST_MAINNET
+        self._rest_url = (
+            _REST_TESTNET if settings.hyperliquid_testnet else _REST_MAINNET
+        )
         self._mids: dict[str, str] = {}
         self._meta: list[dict] = []  # universe metadata
         self._asset_ctxs: list[dict] = []  # live asset contexts
@@ -109,7 +111,9 @@ class MarketDataManager:
                 self._last_meta_fetch = time.monotonic()
                 logger.debug("Fetched meta: %d assets", len(self._meta))
         except Exception as e:
-            logger.error("Failed to fetch metaAndAssetCtxs: %s: %s", type(e).__name__, e)
+            logger.error(
+                "Failed to fetch metaAndAssetCtxs: %s: %s", type(e).__name__, e
+            )
 
     async def _meta_loop(self) -> None:
         """Periodically refresh metadata via REST."""
@@ -126,10 +130,14 @@ class MarketDataManager:
                 async with websockets.connect(self._ws_url) as ws:
                     logger.info("Connected to Hyperliquid WebSocket")
                     # Subscribe to allMids
-                    await ws.send(json.dumps({
-                        "method": "subscribe",
-                        "subscription": {"type": "allMids"},
-                    }))
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "method": "subscribe",
+                                "subscription": {"type": "allMids"},
+                            }
+                        )
+                    )
 
                     ping_task = asyncio.create_task(self._ping_loop(ws))
                     try:
@@ -189,18 +197,20 @@ class MarketDataManager:
                 else 0
             )
 
-            tokens.append({
-                "symbol": symbol,
-                "midPrice": mid_price,
-                "markPx": float(ctx.get("markPx", mid_str)),
-                "prevDayPx": prev_day_px,
-                "change24h": round(change_24h, 2),
-                "funding": ctx.get("funding", "0"),
-                "openInterest": ctx.get("openInterest", "0"),
-                "dayNtlVlm": ctx.get("dayNtlVlm", "0"),
-                "szDecimals": asset.get("szDecimals", 0),
-                "maxLeverage": asset.get("maxLeverage", 50),
-            })
+            tokens.append(
+                {
+                    "symbol": symbol,
+                    "midPrice": mid_price,
+                    "markPx": float(ctx.get("markPx", mid_str)),
+                    "prevDayPx": prev_day_px,
+                    "change24h": round(change_24h, 2),
+                    "funding": ctx.get("funding", "0"),
+                    "openInterest": ctx.get("openInterest", "0"),
+                    "dayNtlVlm": ctx.get("dayNtlVlm", "0"),
+                    "szDecimals": asset.get("szDecimals", 0),
+                    "maxLeverage": asset.get("maxLeverage", 50),
+                }
+            )
 
         # Sort by 24h change descending (top gainers first)
         tokens.sort(key=lambda t: t["change24h"], reverse=True)

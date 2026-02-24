@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 if settings.sentry_dsn:
     try:
         import sentry_sdk
+
         sentry_sdk.init(
             dsn=settings.sentry_dsn,
             environment=settings.environment,
@@ -71,6 +72,7 @@ if settings.sentry_dsn:
 # ---------------------------------------------------------------------------
 # Request correlation-ID middleware
 # ---------------------------------------------------------------------------
+
 
 class CorrelationIDMiddleware(BaseHTTPMiddleware):
     """Attach a unique X-Request-ID to every request/response pair."""
@@ -88,6 +90,7 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -98,6 +101,7 @@ async def lifespan(app: FastAPI):
 
     # Start the Hyperliquid market data WebSocket stream
     from app.services.market_ws import market_data_manager
+
     await market_data_manager.start()
 
     yield
@@ -142,6 +146,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Global exception handlers
 # ---------------------------------------------------------------------------
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -234,6 +239,7 @@ app.include_router(worker_health.router, prefix=prefix)
 
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
+
     Instrumentator(
         should_group_status_codes=True,
         should_ignore_untemplated=True,
@@ -248,6 +254,7 @@ except ImportError:
 # Health endpoint
 # ---------------------------------------------------------------------------
 
+
 @app.get("/health")
 async def health_check():
     db_ok = True
@@ -259,6 +266,7 @@ async def health_check():
     redis_ok = True
     try:
         import redis.asyncio as aioredis
+
         r = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
         await r.ping()
         await r.aclose()

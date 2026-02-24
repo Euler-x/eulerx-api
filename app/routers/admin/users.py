@@ -73,18 +73,26 @@ async def admin_get_user(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
-    strategy_count = (await db.execute(
-        select(func.count(Strategy.id)).where(Strategy.user_id == user_id)
-    )).scalar() or 0
-    execution_count = (await db.execute(
-        select(func.count(Execution.id)).where(Execution.user_id == user_id)
-    )).scalar() or 0
-    subscription_count = (await db.execute(
-        select(func.count(Subscription.id)).where(Subscription.user_id == user_id)
-    )).scalar() or 0
-    transaction_count = (await db.execute(
-        select(func.count(Transaction.id)).where(Transaction.user_id == user_id)
-    )).scalar() or 0
+    strategy_count = (
+        await db.execute(
+            select(func.count(Strategy.id)).where(Strategy.user_id == user_id)
+        )
+    ).scalar() or 0
+    execution_count = (
+        await db.execute(
+            select(func.count(Execution.id)).where(Execution.user_id == user_id)
+        )
+    ).scalar() or 0
+    subscription_count = (
+        await db.execute(
+            select(func.count(Subscription.id)).where(Subscription.user_id == user_id)
+        )
+    ).scalar() or 0
+    transaction_count = (
+        await db.execute(
+            select(func.count(Transaction.id)).where(Transaction.user_id == user_id)
+        )
+    ).scalar() or 0
 
     resp = AdminUserDetailResponse.model_validate(user)
     resp.strategy_count = strategy_count

@@ -79,20 +79,24 @@ async def get_signal_history(
     query = (
         select(Signal)
         .where(
-            Signal.status.in_([
-                SignalStatus.FILLED,
-                SignalStatus.EXPIRED,
-                SignalStatus.CANCELLED,
-            ])
+            Signal.status.in_(
+                [
+                    SignalStatus.FILLED,
+                    SignalStatus.EXPIRED,
+                    SignalStatus.CANCELLED,
+                ]
+            )
         )
         .order_by(Signal.created_at.desc())
     )
     count_query = select(func.count(Signal.id)).where(
-        Signal.status.in_([
-            SignalStatus.FILLED,
-            SignalStatus.EXPIRED,
-            SignalStatus.CANCELLED,
-        ])
+        Signal.status.in_(
+            [
+                SignalStatus.FILLED,
+                SignalStatus.EXPIRED,
+                SignalStatus.CANCELLED,
+            ]
+        )
     )
 
     total_result = await db.execute(count_query)

@@ -21,7 +21,9 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+    )
 
 
 # ─── Wallet Address Hashing ─────────────────────────────
@@ -92,7 +94,9 @@ def create_access_token(user_id: str, is_admin: bool = False) -> str:
         "exp": expire,
         "type": "access",
     }
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
+    )
 
 
 def create_refresh_token(user_id: str) -> str:
@@ -104,7 +108,9 @@ def create_refresh_token(user_id: str) -> str:
         "exp": expire,
         "type": "refresh",
     }
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
+    )
 
 
 def verify_token(token: str, expected_type: str = "access") -> dict:
@@ -126,9 +132,7 @@ def verify_token(token: str, expected_type: str = "access") -> dict:
 # ─── Wallet Signature Verification ──────────────────────
 
 
-def verify_wallet_signature(
-    wallet_address: str, message: str, signature: str
-) -> bool:
+def verify_wallet_signature(wallet_address: str, message: str, signature: str) -> bool:
     try:
         w3 = Web3()
         msg = encode_defunct(text=message)

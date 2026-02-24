@@ -57,9 +57,7 @@ async def admin_get_ambassador(
     ambassador_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ambassador).where(Ambassador.id == ambassador_id)
-    )
+    result = await db.execute(select(Ambassador).where(Ambassador.id == ambassador_id))
     ambassador = result.scalar_one_or_none()
     if ambassador is None:
         raise HTTPException(status_code=404, detail="Ambassador not found")
@@ -74,9 +72,7 @@ async def admin_update_ambassador(
     db: AsyncSession = Depends(get_db),
     admin_user: User = Depends(get_admin_user),
 ):
-    result = await db.execute(
-        select(Ambassador).where(Ambassador.id == ambassador_id)
-    )
+    result = await db.execute(select(Ambassador).where(Ambassador.id == ambassador_id))
     ambassador = result.scalar_one_or_none()
     if ambassador is None:
         raise HTTPException(status_code=404, detail="Ambassador not found")

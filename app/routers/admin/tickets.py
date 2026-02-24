@@ -54,9 +54,7 @@ async def admin_list_tickets(
 
 
 @router.get("/tickets/{ticket_id}", response_model=TicketDetailResponse)
-async def admin_get_ticket(
-    ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-):
+async def admin_get_ticket(ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(SupportTicket)
         .options(selectinload(SupportTicket.messages))
@@ -118,9 +116,7 @@ async def admin_reply_to_ticket(
     await db.flush()
 
     # Notify ticket owner of admin reply
-    ticket_user_result = await db.execute(
-        select(User).where(User.id == ticket.user_id)
-    )
+    ticket_user_result = await db.execute(select(User).where(User.id == ticket.user_id))
     ticket_user = ticket_user_result.scalar_one_or_none()
     if ticket_user:
         notification_service = NotificationService()

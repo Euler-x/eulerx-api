@@ -20,7 +20,7 @@ async def list_published_content(
 ):
     result = await db.execute(
         select(LearningContent)
-        .where(LearningContent.is_published == True)
+        .where(LearningContent.is_published == True)  # noqa: E712
         .order_by(LearningContent.display_order.asc())
     )
     content = result.scalars().all()
@@ -36,7 +36,7 @@ async def get_content_detail(
     result = await db.execute(
         select(LearningContent).where(
             LearningContent.id == content_id,
-            LearningContent.is_published == True,
+            LearningContent.is_published == True,  # noqa: E712
         )
     )
     content = result.scalar_one_or_none()

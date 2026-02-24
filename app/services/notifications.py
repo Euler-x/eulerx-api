@@ -176,7 +176,9 @@ class NotificationService:
         try:
             return decrypt_telegram_token(user.telegram_bot_token)
         except (ValueError, Exception) as e:
-            logger.warning("Failed to decrypt Telegram token for user %s: %s", user.id, e)
+            logger.warning(
+                "Failed to decrypt Telegram token for user %s: %s", user.id, e
+            )
             return None
 
     # ── Improvement #3: Notification Preferences ──────────────────
@@ -225,9 +227,7 @@ class NotificationService:
             except Exception as e:
                 logger.error("Email dispatch failed (%s): %s", category, e)
 
-    async def _dispatch_telegram(
-        self, user: User, category: str, text: str
-    ) -> None:
+    async def _dispatch_telegram(self, user: User, category: str, text: str) -> None:
         """Send Telegram if user has Telegram and preference is enabled."""
         if self._has_telegram(user) and self._is_enabled(user, category, "telegram"):
             token = self._get_telegram_token(user)
@@ -416,9 +416,7 @@ class NotificationService:
         if not self._check_notification_rate(user, "signal_generated"):
             return
 
-        subject, html = email_templates.signal_generated(
-            strategy_name, signal_count
-        )
+        subject, html = email_templates.signal_generated(strategy_name, signal_count)
         await self._dispatch_email(user, "signals", subject, html)
 
         text = telegram_templates.signal_generated(strategy_name, signal_count)

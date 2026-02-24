@@ -77,9 +77,7 @@ def strategy_paused(strategy_name: str, reason: str) -> str:
     )
 
 
-def subscription_activated(
-    plan_name: str, billing_cycle: str, expires_at: str
-) -> str:
+def subscription_activated(plan_name: str, billing_cycle: str, expires_at: str) -> str:
     return (
         f"\u2705 <b>Subscription Activated</b>\n\n"
         f"<b>Plan:</b> {plan_name}\n"
@@ -88,9 +86,7 @@ def subscription_activated(
     )
 
 
-def subscription_expiring(
-    plan_name: str, days_remaining: int, expires_at: str
-) -> str:
+def subscription_expiring(plan_name: str, days_remaining: int, expires_at: str) -> str:
     s = "s" if days_remaining != 1 else ""
     return (
         f"\u26a0\ufe0f <b>Subscription Expiring</b>\n\n"

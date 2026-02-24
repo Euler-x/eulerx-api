@@ -1,7 +1,7 @@
 """Test Celery worker tasks — async inner functions and pipeline orchestration."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -143,20 +143,25 @@ async def test_generate_signals_creates_signals(pipeline_fixtures):
     mock_signal = MagicMock()
     mock_signal.id = uuid.uuid4()
 
-    with patch(
-        "app.worker.tasks.async_session_factory",
-        TestSessionFactory,
-    ), patch(
-        "app.worker.tasks.AIEngineService.generate_signals",
-        new_callable=AsyncMock,
-        return_value=[mock_signal],
-    ), patch(
-        "app.worker.tasks.NotificationService.send_signal_generated",
-        new_callable=AsyncMock,
-    ), patch(
-        "app.worker.tasks.ATEService.check_drawdown",
-        new_callable=AsyncMock,
-        return_value=False,
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.worker.tasks.AIEngineService.generate_signals",
+            new_callable=AsyncMock,
+            return_value=[mock_signal],
+        ),
+        patch(
+            "app.worker.tasks.NotificationService.send_signal_generated",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.worker.tasks.ATEService.check_drawdown",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
     ):
         result = await _generate_signals_for_strategy_async(strategy_id, market_data)
 
@@ -183,13 +188,16 @@ async def test_generate_signals_paused_on_drawdown(pipeline_fixtures):
 
     strategy_id = str(pipeline_fixtures["strategy_id"])
 
-    with patch(
-        "app.worker.tasks.async_session_factory",
-        TestSessionFactory,
-    ), patch(
-        "app.worker.tasks.ATEService.check_drawdown",
-        new_callable=AsyncMock,
-        return_value=True,
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.worker.tasks.ATEService.check_drawdown",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
     ):
         result = await _generate_signals_for_strategy_async(
             strategy_id, [{"symbol": "BTC"}]
@@ -213,13 +221,16 @@ async def test_execute_signal_fills_order(pipeline_fixtures):
     mock_execution.status = ExecutionStatus.FILLED
     mock_execution.id = uuid.uuid4()
 
-    with patch(
-        "app.worker.tasks.async_session_factory",
-        TestSessionFactory,
-    ), patch(
-        "app.worker.tasks.ATEService.execute_signal",
-        new_callable=AsyncMock,
-        return_value=mock_execution,
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.worker.tasks.ATEService.execute_signal",
+            new_callable=AsyncMock,
+            return_value=mock_execution,
+        ),
     ):
         result = await _execute_signal_async(signal_id, strategy_id)
 
@@ -251,9 +262,7 @@ async def test_execute_signal_rejects_non_new(pipeline_fixtures):
     async with TestSessionFactory() as session:
         from sqlalchemy import select
 
-        result = await session.execute(
-            select(Signal).where(Signal.id == signal_id)
-        )
+        result = await session.execute(select(Signal).where(Signal.id == signal_id))
         signal = result.scalar_one()
         signal.status = SignalStatus.FILLED
         await session.commit()
@@ -266,9 +275,7 @@ async def test_execute_signal_rejects_non_new(pipeline_fixtures):
 
     # Reset signal status for other tests
     async with TestSessionFactory() as session:
-        result = await session.execute(
-            select(Signal).where(Signal.id == signal_id)
-        )
+        result = await session.execute(select(Signal).where(Signal.id == signal_id))
         signal = result.scalar_one()
         signal.status = SignalStatus.NEW
         await session.commit()
@@ -386,16 +393,20 @@ async def test_check_expiring_subscriptions(setup_db):
     # Patch utc_now to return naive datetime (SQLite strips timezone info)
     naive_now = datetime.utcnow()
 
-    with patch(
-        "app.worker.tasks.async_session_factory",
-        TestSessionFactory,
-    ), patch(
-        "app.worker.tasks.utc_now",
-        return_value=naive_now,
-    ), patch(
-        "app.worker.tasks.NotificationService.send_subscription_expiring",
-        new_callable=AsyncMock,
-    ) as mock_notify:
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.worker.tasks.utc_now",
+            return_value=naive_now,
+        ),
+        patch(
+            "app.worker.tasks.NotificationService.send_subscription_expiring",
+            new_callable=AsyncMock,
+        ) as mock_notify,
+    ):
         count = await _check_expiring_subscriptions_async()
 
     assert count >= 1
@@ -468,12 +479,15 @@ async def test_monitor_open_positions_task(setup_db, mock_hyperliquid_api):
     # Price above TP
     mock_hyperliquid_api["get_all_mids"].return_value = {"ETH": "3600.0"}
 
-    with patch(
-        "app.worker.tasks.async_session_factory",
-        TestSessionFactory,
-    ), patch(
-        "app.services.ate.NotificationService",
-    ) as MockNotif:
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.services.ate.NotificationService",
+        ) as MockNotif,
+    ):
         mock_service = MockNotif.return_value
         mock_service.send_take_profit_hit = AsyncMock()
         mock_service.send_stop_loss_hit = AsyncMock()
@@ -507,34 +521,38 @@ async def test_run_analysis_pipeline_no_market_data(setup_db):
 @pytest.mark.asyncio
 async def test_run_analysis_pipeline_no_active_strategies(setup_db):
     """Pipeline handles no active strategies gracefully."""
-    from app.worker.tasks import _get_active_strategy_ids_async
 
     # Use a fresh DB with no active strategies by querying with a filter
-    with patch("app.worker.tasks.async_session_factory", TestSessionFactory), \
-         patch(
-             "app.worker.tasks.select",
-             side_effect=lambda *args: __import__("sqlalchemy").select(*args).where(
-                 Strategy.id == uuid.uuid4()  # Non-existent ID
-             ),
-         ):
+    with (
+        patch("app.worker.tasks.async_session_factory", TestSessionFactory),
+        patch(
+            "app.worker.tasks.select",
+            side_effect=lambda *args: (
+                __import__("sqlalchemy")
+                .select(*args)
+                .where(
+                    Strategy.id == uuid.uuid4()  # Non-existent ID
+                )
+            ),
+        ),
+    ):
         pass  # Can't easily mock this way
 
     # Instead, test the orchestrator logic directly
     # by mocking the helper functions
-    from app.worker.tasks import (
-        _fetch_market_data_async,
-        _get_active_strategy_ids_async,
-    )
 
-    with patch(
-        "app.worker.tasks._fetch_market_data_async",
-        new_callable=AsyncMock,
-        return_value=[{"symbol": "BTC"}],
-    ) as mock_fetch, patch(
-        "app.worker.tasks._get_active_strategy_ids_async",
-        new_callable=AsyncMock,
-        return_value=[],
-    ) as mock_ids:
+    with (
+        patch(
+            "app.worker.tasks._fetch_market_data_async",
+            new_callable=AsyncMock,
+            return_value=[{"symbol": "BTC"}],
+        ) as mock_fetch,
+        patch(
+            "app.worker.tasks._get_active_strategy_ids_async",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_ids,
+    ):
         # The run_analysis_pipeline function is synchronous and calls run_async
         # Test the orchestration logic by calling the pieces
         market_data = await mock_fetch()
@@ -780,11 +798,8 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
 
     async with TestSessionFactory() as session:
         from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
 
-        sig_result = await session.execute(
-            select(Signal).where(Signal.id == signal_id)
-        )
+        sig_result = await session.execute(select(Signal).where(Signal.id == signal_id))
         signal = sig_result.scalar_one()
 
         strat_result = await session.execute(
@@ -792,18 +807,19 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
         )
         strategy = strat_result.scalar_one()
 
-        user_result = await session.execute(
-            select(User).where(User.id == user_id)
-        )
+        user_result = await session.execute(select(User).where(User.id == user_id))
         user = user_result.scalar_one()
 
         ate = ATEService()
-        with patch(
-            "app.services.ate.NotificationService.send_trade_executed",
-            new_callable=AsyncMock,
-        ), patch(
-            "app.services.ate.VerificationService.log_execution_transaction",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "app.services.ate.NotificationService.send_trade_executed",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.services.ate.VerificationService.log_execution_transaction",
+                new_callable=AsyncMock,
+            ),
         ):
             execution = await ate.execute_signal(session, signal, strategy, user)
             await session.commit()

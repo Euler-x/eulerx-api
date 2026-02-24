@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.auth import require_verified_email
 from app.models.ambassador import Ambassador
-from app.models.schemas.ambassador import AmbassadorResponse, LeaderboardEntry, ReferralResponse
-from app.models.schemas.auth import UserResponse
+from app.models.schemas.ambassador import (
+    AmbassadorResponse,
+    LeaderboardEntry,
+    ReferralResponse,
+)
 from app.models.user import User
 from app.utils.helpers import generate_referral_code
 
@@ -34,9 +37,7 @@ async def get_leaderboard(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Ambassador)
-        .order_by(Ambassador.total_referrals.desc())
-        .limit(limit)
+        select(Ambassador).order_by(Ambassador.total_referrals.desc()).limit(limit)
     )
     ambassadors = result.scalars().all()
 

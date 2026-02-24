@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,11 +46,13 @@ async def admin_revenue_analytics(
         period_revenue = float((await db.execute(period_query)).scalar() or 0)
 
     # Active subscriptions
-    active_subs = (await db.execute(
-        select(func.count(Subscription.id)).where(
-            Subscription.status == SubscriptionStatus.ACTIVE
+    active_subs = (
+        await db.execute(
+            select(func.count(Subscription.id)).where(
+                Subscription.status == SubscriptionStatus.ACTIVE
+            )
         )
-    )).scalar() or 0
+    ).scalar() or 0
 
     # Total users
     total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
@@ -73,11 +75,13 @@ async def admin_revenue_analytics(
     )
     plan_result = await db.execute(plan_query)
     for row in plan_result.all():
-        revenue_by_plan.append({
-            "plan_name": row[0],
-            "subscriptions": row[1],
-            "revenue_usd": float(row[2]),
-        })
+        revenue_by_plan.append(
+            {
+                "plan_name": row[0],
+                "subscriptions": row[1],
+                "revenue_usd": float(row[2]),
+            }
+        )
 
     return RevenueAnalyticsResponse(
         total_revenue_usd=float(total_revenue),
@@ -95,12 +99,16 @@ async def admin_user_growth(
     db: AsyncSession = Depends(get_db),
 ):
     total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
-    active_users = (await db.execute(
-        select(func.count(User.id)).where(User.is_active == True)  # noqa: E712
-    )).scalar() or 0
-    admin_users = (await db.execute(
-        select(func.count(User.id)).where(User.is_admin == True)  # noqa: E712
-    )).scalar() or 0
+    active_users = (
+        await db.execute(
+            select(func.count(User.id)).where(User.is_active == True)  # noqa: E712
+        )
+    ).scalar() or 0
+    admin_users = (
+        await db.execute(
+            select(func.count(User.id)).where(User.is_admin == True)  # noqa: E712
+        )
+    ).scalar() or 0
 
     # New users in period
     new_query = select(func.count(User.id))
@@ -130,14 +138,24 @@ async def admin_execution_stats(
     if end_date:
         base_filter.append(Execution.created_at <= end_date)
 
-    total_query = select(func.count(Execution.id)).where(*base_filter) if base_filter else select(func.count(Execution.id))
+    total_query = (
+        select(func.count(Execution.id)).where(*base_filter)
+        if base_filter
+        else select(func.count(Execution.id))
+    )
     total = (await db.execute(total_query)).scalar() or 0
 
     # Counts by status
     status_query = select(
-        func.count(case((Execution.status == ExecutionStatus.PENDING, 1))).label("pending"),
-        func.count(case((Execution.status == ExecutionStatus.FILLED, 1))).label("filled"),
-        func.count(case((Execution.status == ExecutionStatus.FAILED, 1))).label("failed"),
+        func.count(case((Execution.status == ExecutionStatus.PENDING, 1))).label(
+            "pending"
+        ),
+        func.count(case((Execution.status == ExecutionStatus.FILLED, 1))).label(
+            "filled"
+        ),
+        func.count(case((Execution.status == ExecutionStatus.FAILED, 1))).label(
+            "failed"
+        ),
         func.coalesce(func.sum(Execution.pnl), 0).label("total_pnl"),
     )
     if base_filter:

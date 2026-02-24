@@ -18,9 +18,7 @@ if TYPE_CHECKING:
 class SupportTicket(Base, TimestampMixin):
     __tablename__ = "support_tickets"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -47,9 +45,7 @@ class SupportTicket(Base, TimestampMixin):
 class SupportMessage(Base):
     __tablename__ = "support_messages"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("support_tickets.id", ondelete="CASCADE"),

@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 class Ambassador(Base, TimestampMixin):
     __tablename__ = "ambassadors"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -30,9 +28,7 @@ class Ambassador(Base, TimestampMixin):
         SAEnum(AmbassadorRank, name="ambassador_rank_enum"),
         default=AmbassadorRank.BRONZE,
     )
-    referral_code: Mapped[str] = mapped_column(
-        String(20), unique=True, nullable=False
-    )
+    referral_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     referred_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("ambassadors.id", ondelete="SET NULL"),

@@ -26,9 +26,7 @@ async def admin_list_config(db: AsyncSession = Depends(get_db)):
 
 @router.get("/config/{key}", response_model=AdminConfigResponse)
 async def admin_get_config(key: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(AdminConfig).where(AdminConfig.key == key)
-    )
+    result = await db.execute(select(AdminConfig).where(AdminConfig.key == key))
     config = result.scalar_one_or_none()
     if config is None:
         raise HTTPException(status_code=404, detail="Config key not found")
@@ -43,9 +41,7 @@ async def admin_set_config(
     db: AsyncSession = Depends(get_db),
     admin_user: User = Depends(get_admin_user),
 ):
-    result = await db.execute(
-        select(AdminConfig).where(AdminConfig.key == key)
-    )
+    result = await db.execute(select(AdminConfig).where(AdminConfig.key == key))
     config = result.scalar_one_or_none()
 
     if config is None:
@@ -83,9 +79,7 @@ async def admin_delete_config(
             detail=f"Config key '{key}' is protected and cannot be deleted",
         )
 
-    result = await db.execute(
-        select(AdminConfig).where(AdminConfig.key == key)
-    )
+    result = await db.execute(select(AdminConfig).where(AdminConfig.key == key))
     config = result.scalar_one_or_none()
     if config is None:
         raise HTTPException(status_code=404, detail="Config key not found")

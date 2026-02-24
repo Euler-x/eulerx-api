@@ -35,32 +35,26 @@ celery_app.conf.update(
     broker_url=settings.redis_url,
     result_backend=settings.redis_url,
     broker_connection_retry_on_startup=True,
-
     # Serialization
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-
     # Time & timezone
     timezone="UTC",
     enable_utc=True,
-
     # Task execution
     task_always_eager=settings.celery_task_always_eager,
     task_time_limit=settings.celery_task_time_limit,
     task_soft_time_limit=settings.celery_task_soft_time_limit,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-
     # Result management
     result_expires=3600,
     result_extended=True,
-
     # Retry & reliability
     task_reject_on_worker_lost=True,
     task_default_retry_delay=settings.analysis_retry_backoff,
     task_max_retries=settings.analysis_max_retries,
-
     # Queue routing
     task_routes={
         "app.worker.tasks.run_analysis_pipeline": {"queue": "analysis"},
@@ -74,11 +68,9 @@ celery_app.conf.update(
         "app.worker.tasks.monitor_open_positions": {"queue": "execution"},
         "app.worker.tasks.cleanup_old_data": {"queue": "maintenance"},
     },
-
     # Worker lifecycle
     worker_max_tasks_per_child=50,
     worker_max_memory_per_child=512_000,
-
     # Beat schedule
     beat_schedule={
         "analysis-pipeline-every-2h": {

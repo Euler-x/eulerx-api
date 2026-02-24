@@ -26,7 +26,7 @@ from datetime import timedelta
 
 from app.config import get_settings
 from app.db.base import async_session_factory
-from app.models.billing import Plan, Subscription
+from app.models.billing import Subscription
 from app.models.admin_config import AdminConfig
 from app.models.enums import SignalStatus, SubscriptionStatus
 from app.models.signal import Signal
@@ -84,7 +84,9 @@ async def _generate_signals_for_strategy_async(
             strategy = result.scalar_one_or_none()
 
             if strategy is None:
-                logger.warning("Strategy %s not found or inactive, skipping", strategy_id)
+                logger.warning(
+                    "Strategy %s not found or inactive, skipping", strategy_id
+                )
                 return []
 
             user = strategy.user
@@ -95,10 +97,12 @@ async def _generate_signals_for_strategy_async(
                 .options(selectinload(Subscription.plan))
                 .where(
                     Subscription.user_id == user.id,
-                    Subscription.status.in_([
-                        SubscriptionStatus.ACTIVE,
-                        SubscriptionStatus.EXPIRING_SOON,
-                    ]),
+                    Subscription.status.in_(
+                        [
+                            SubscriptionStatus.ACTIVE,
+                            SubscriptionStatus.EXPIRING_SOON,
+                        ]
+                    ),
                 )
                 .order_by(Subscription.created_at.desc())
                 .limit(1)
@@ -117,7 +121,9 @@ async def _generate_signals_for_strategy_async(
             ate_service = ATEService()
             drawdown_hit = await ate_service.check_drawdown(session, strategy, user)
             if drawdown_hit:
-                logger.warning("Strategy %s hit drawdown limit, auto-paused", strategy_id)
+                logger.warning(
+                    "Strategy %s hit drawdown limit, auto-paused", strategy_id
+                )
                 await session.commit()
                 return []
 
@@ -186,7 +192,10 @@ async def _execute_signal_async(signal_id: str, strategy_id: str) -> dict:
                 return {"status": "skipped", "reason": "Signal not found"}
 
             if signal.status != SignalStatus.NEW:
-                return {"status": "skipped", "reason": f"Signal status is {signal.status.value}"}
+                return {
+                    "status": "skipped",
+                    "reason": f"Signal status is {signal.status.value}",
+                }
 
             if signal.expires_at and signal.expires_at < utc_now():
                 signal.status = SignalStatus.EXPIRED
@@ -298,9 +307,7 @@ def generate_signals_for_strategy(
 ) -> list[str]:
     """Generate AI signals for a specific strategy. Stage 2 of pipeline."""
     try:
-        return run_async(
-            _generate_signals_for_strategy_async(strategy_id, market_data)
-        )
+        return run_async(_generate_signals_for_strategy_async(strategy_id, market_data))
     except SoftTimeLimitExceeded:
         logger.error(
             "generate_signals_for_strategy(%s) hit soft time limit",
@@ -422,9 +429,7 @@ def run_analysis_pipeline(self) -> dict:
                 )
                 if signal_ids:
                     total_signals += len(signal_ids)
-                    all_signal_pairs.extend(
-                        (sid, strategy_id) for sid in signal_ids
-                    )
+                    all_signal_pairs.extend((sid, strategy_id) for sid in signal_ids)
             except Exception as exc:
                 logger.error(
                     "[Pipeline %s] Signal generation failed for strategy %s: %s",
@@ -437,9 +442,7 @@ def run_analysis_pipeline(self) -> dict:
         # Stage 4: Execute each generated signal
         for signal_id, strategy_id in all_signal_pairs:
             try:
-                result = run_async(
-                    _execute_signal_async(signal_id, strategy_id)
-                )
+                result = run_async(_execute_signal_async(signal_id, strategy_id))
                 if result.get("status") in ("filled", "FILLED"):
                     total_executions += 1
                 logger.info(
@@ -619,9 +622,7 @@ def send_notification_telegram(
     text: str,
 ) -> dict:
     """Send a Telegram notification asynchronously via Celery."""
-    success = run_async(
-        _send_notification_telegram_async(bot_token, chat_id, text)
-    )
+    success = run_async(_send_notification_telegram_async(bot_token, chat_id, text))
     return {"sent": success, "chat_id": chat_id}
 
 
@@ -676,6 +677,7 @@ async def _cleanup_old_data_async() -> dict:
         try:
             # Delete expired signals older than retention period
             from sqlalchemy import delete
+
             result = await session.execute(
                 delete(Signal).where(
                     Signal.status == SignalStatus.EXPIRED,

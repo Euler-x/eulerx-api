@@ -60,7 +60,9 @@ class Settings(BaseSettings):
     def _validate_critical_settings(self):
         if self.environment == "production":
             if len(self.jwt_secret_key) < 32:
-                raise ValueError("JWT_SECRET_KEY must be at least 32 characters in production")
+                raise ValueError(
+                    "JWT_SECRET_KEY must be at least 32 characters in production"
+                )
             if not self.wallet_encryption_key:
                 raise ValueError("WALLET_ENCRYPTION_KEY is required in production")
         return self
@@ -68,7 +70,9 @@ class Settings(BaseSettings):
     # OpenRouter
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_models: str = "anthropic/claude-sonnet-4-20250514,openai/gpt-4o,google/gemini-2.0-flash"
+    openrouter_models: str = (
+        "anthropic/claude-sonnet-4-20250514,openai/gpt-4o,google/gemini-2.0-flash"
+    )
 
     @property
     def openrouter_model_list(self) -> list[str]:

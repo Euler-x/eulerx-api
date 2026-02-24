@@ -21,9 +21,7 @@ class InMemoryRateLimiter:
     def _clean_old_requests(self, key: str) -> None:
         now = time.time()
         cutoff = now - self.window_seconds
-        self._requests[key] = [
-            t for t in self._requests[key] if t > cutoff
-        ]
+        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
 
     def check(self, key: str) -> bool:
         self._clean_old_requests(key)

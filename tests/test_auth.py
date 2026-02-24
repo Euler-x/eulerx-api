@@ -7,7 +7,9 @@ from unittest.mock import patch
 @pytest.mark.asyncio
 async def test_connect_wallet_invalid_agent_key(client):
     """POST /auth/connect with invalid agent key returns 400."""
-    with patch("app.routers.auth.WalletService.validate_private_key", return_value=None):
+    with patch(
+        "app.routers.auth.WalletService.validate_private_key", return_value=None
+    ):
         response = await client.post(
             "/api/v1/auth/connect",
             json={
@@ -22,7 +24,9 @@ async def test_connect_wallet_invalid_agent_key(client):
 async def test_connect_wallet_valid_agent_key(client):
     """POST /auth/connect with valid agent key returns tokens."""
     agent_addr = "0x" + "b" * 40
-    with patch("app.routers.auth.WalletService.validate_private_key", return_value=agent_addr):
+    with patch(
+        "app.routers.auth.WalletService.validate_private_key", return_value=agent_addr
+    ):
         response = await client.post(
             "/api/v1/auth/connect",
             json={

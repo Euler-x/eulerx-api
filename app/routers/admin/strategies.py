@@ -65,9 +65,7 @@ async def admin_get_strategy(
     strategy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Strategy).where(Strategy.id == strategy_id)
-    )
+    result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -82,9 +80,7 @@ async def admin_update_strategy(
     db: AsyncSession = Depends(get_db),
     admin_user: User = Depends(get_admin_user),
 ):
-    result = await db.execute(
-        select(Strategy).where(Strategy.id == strategy_id)
-    )
+    result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -116,9 +112,7 @@ async def admin_deactivate_strategy(
     db: AsyncSession = Depends(get_db),
     admin_user: User = Depends(get_admin_user),
 ):
-    result = await db.execute(
-        select(Strategy).where(Strategy.id == strategy_id)
-    )
+    result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -145,9 +139,7 @@ async def admin_delete_strategy(
     db: AsyncSession = Depends(get_db),
     admin_user: User = Depends(get_admin_user),
 ):
-    result = await db.execute(
-        select(Strategy).where(Strategy.id == strategy_id)
-    )
+    result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")

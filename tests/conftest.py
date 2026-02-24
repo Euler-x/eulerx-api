@@ -32,7 +32,7 @@ from app.db.base import Base, get_db  # noqa: E402
 from app.models.database import *  # noqa: E402, F401, F403 — register all models
 from app.models.enums import WalletType  # noqa: E402
 from app.models.user import User  # noqa: E402
-from app.utils.security import create_access_token, encrypt_telegram_token  # noqa: E402
+from app.utils.security import create_access_token  # noqa: E402
 
 settings = get_settings()
 
@@ -182,8 +182,10 @@ def mock_telegram_response(ok=True, username="test_bot"):
 @pytest.fixture
 def mock_telegram_api():
     """Mock all Telegram Bot API HTTP calls."""
-    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
-         patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+    with (
+        patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get,
+    ):
         # Default: successful responses
         mock_post.return_value = mock_telegram_response(ok=True)
         mock_get.return_value = mock_telegram_response(ok=True, username="test_bot")
@@ -204,16 +206,20 @@ def mock_email_api():
 @pytest.fixture
 def mock_hyperliquid_api():
     """Mock Hyperliquid API calls."""
-    with patch(
-        "app.services.hyperliquid.HyperliquidService.get_all_mids",
-        new_callable=AsyncMock,
-    ) as mock_mids, patch(
-        "app.services.hyperliquid.HyperliquidService.place_order",
-        new_callable=AsyncMock,
-    ) as mock_order, patch(
-        "app.services.hyperliquid.HyperliquidService.close_position",
-        new_callable=AsyncMock,
-    ) as mock_close:
+    with (
+        patch(
+            "app.services.hyperliquid.HyperliquidService.get_all_mids",
+            new_callable=AsyncMock,
+        ) as mock_mids,
+        patch(
+            "app.services.hyperliquid.HyperliquidService.place_order",
+            new_callable=AsyncMock,
+        ) as mock_order,
+        patch(
+            "app.services.hyperliquid.HyperliquidService.close_position",
+            new_callable=AsyncMock,
+        ) as mock_close,
+    ):
         mock_mids.return_value = {"BTC": "50000.0", "ETH": "3000.0", "SOL": "150.0"}
         mock_order.return_value = {"success": True, "tx_hash": "0x" + "a" * 64}
         mock_close.return_value = {"success": True, "tx_hash": "0x" + "b" * 64}

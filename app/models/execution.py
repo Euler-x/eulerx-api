@@ -20,9 +20,7 @@ if TYPE_CHECKING:
 class Execution(Base):
     __tablename__ = "executions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     signal_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("signals.id", ondelete="CASCADE"),
@@ -79,6 +77,4 @@ class Execution(Base):
     user: Mapped["User"] = relationship(back_populates="executions")
     strategy: Mapped["Strategy"] = relationship(back_populates="executions")
 
-    __table_args__ = (
-        Index("ix_executions_user_status", "user_id", "status"),
-    )
+    __table_args__ = (Index("ix_executions_user_status", "user_id", "status"),)

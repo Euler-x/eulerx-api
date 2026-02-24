@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.auth import require_verified_email
-from app.middleware.subscription import SubscriptionInfo, get_subscription_info, require_active_subscription
+from app.middleware.subscription import (
+    SubscriptionInfo,
+    get_subscription_info,
+    require_active_subscription,
+)
 from app.models.schemas.common import MessageResponse
 from app.models.schemas.strategy import StrategyCreate, StrategyResponse, StrategyUpdate
 from app.models.strategy import Strategy
@@ -39,9 +43,7 @@ async def create_strategy(
     # Enforce plan limits if subscription exists
     if sub_info.is_active and sub_info.max_strategies > 0:
         count_result = await db.execute(
-            select(func.count(Strategy.id)).where(
-                Strategy.user_id == current_user.id
-            )
+            select(func.count(Strategy.id)).where(Strategy.user_id == current_user.id)
         )
         current_count = count_result.scalar() or 0
         if current_count >= sub_info.max_strategies:

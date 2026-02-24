@@ -21,9 +21,7 @@ async def admin_list_plans(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/plans", response_model=PlanResponse, status_code=201)
-async def admin_create_plan(
-    data: PlanCreate, db: AsyncSession = Depends(get_db)
-):
+async def admin_create_plan(data: PlanCreate, db: AsyncSession = Depends(get_db)):
     existing = await db.execute(select(Plan).where(Plan.name == data.name))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Plan name already exists")
@@ -54,9 +52,7 @@ async def admin_update_plan(
 
 
 @router.delete("/plans/{plan_id}", response_model=MessageResponse)
-async def admin_delete_plan(
-    plan_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-):
+async def admin_delete_plan(plan_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Plan).where(Plan.id == plan_id))
     plan = result.scalar_one_or_none()
     if plan is None:

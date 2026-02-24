@@ -23,26 +23,20 @@ if TYPE_CHECKING:
 class User(Base, TimestampMixin):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     wallet_address_hash: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, nullable=True, index=True
     )
-    wallet_address: Mapped[Optional[str]] = mapped_column(
-        String(42), nullable=True
-    )
+    wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True)
     wallet_type: Mapped[Optional[WalletType]] = mapped_column(
         SAEnum(WalletType, name="wallet_type_enum"), nullable=True
     )
-    encrypted_private_key: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
-    password_hash: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
+    encrypted_private_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
 
     # Email verification
     email: Mapped[Optional[str]] = mapped_column(
@@ -62,9 +56,7 @@ class User(Base, TimestampMixin):
     telegram_bot_token: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
-    telegram_chat_id: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True
-    )
+    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Notification preferences (JSON: {category}_{channel} -> bool)
     notification_preferences: Mapped[Optional[dict]] = mapped_column(

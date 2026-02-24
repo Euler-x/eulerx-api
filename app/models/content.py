@@ -14,9 +14,7 @@ from app.models.enums import ContentCategory, ContentType
 class LearningContent(Base, TimestampMixin):
     __tablename__ = "learning_content"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     category: Mapped[ContentCategory] = mapped_column(

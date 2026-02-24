@@ -6,9 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.models.enums import (
     AmbassadorRank,
-    ExecutionStatus,
     RiskProfile,
-    SignalStatus,
     SubscriptionStatus,
     WalletType,
 )

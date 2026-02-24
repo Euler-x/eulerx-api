@@ -109,12 +109,15 @@ async def halt_trading(
         )
 
     # Persist halt state with the list of affected strategy IDs
-    await _upsert_halt_config(db, {
-        "halted": True,
-        "halted_strategy_ids": active_ids,
-        "reason": body.reason,
-        "halted_by": str(current_admin.id),
-    })
+    await _upsert_halt_config(
+        db,
+        {
+            "halted": True,
+            "halted_strategy_ids": active_ids,
+            "reason": body.reason,
+            "halted_by": str(current_admin.id),
+        },
+    )
 
     # Audit log — committed atomically by get_db dependency
     await log_audit(
@@ -157,9 +160,7 @@ async def resume_trading(
     if halted_ids:
         uuid_ids = [uuid.UUID(sid) for sid in halted_ids]
         await db.execute(
-            update(Strategy)
-            .where(Strategy.id.in_(uuid_ids))
-            .values(is_active=True)
+            update(Strategy).where(Strategy.id.in_(uuid_ids)).values(is_active=True)
         )
         resumed_count = len(halted_ids)
 

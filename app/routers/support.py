@@ -6,16 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
-from app.middleware.auth import get_current_user, get_admin_user
+from app.middleware.auth import get_current_user
 from app.models.enums import TicketStatus
-from app.models.schemas.common import MessageResponse, PaginatedResponse
+from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.support import (
     MessageCreate,
     SupportMessageResponse,
     SupportTicketResponse,
     TicketCreate,
     TicketDetailResponse,
-    TicketUpdateStatus,
 )
 from app.models.support import SupportMessage, SupportTicket
 from app.models.user import User

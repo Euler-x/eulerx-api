@@ -1,8 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import timedelta
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,9 +77,7 @@ class AIEngineService:
                     },
                     json={
                         "model": model_id,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ],
+                        "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.3,
                         "max_tokens": 500,
                     },
@@ -92,7 +89,9 @@ class AIEngineService:
                 # Strip markdown code fences if present
                 content = content.strip()
                 if content.startswith("```"):
-                    content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                    content = (
+                        content.split("\n", 1)[1] if "\n" in content else content[3:]
+                    )
                 if content.endswith("```"):
                     content = content[:-3]
                 content = content.strip()
@@ -102,7 +101,9 @@ class AIEngineService:
                 return parsed
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"OpenRouter API error for {model_id}: {e.response.status_code}")
+            logger.error(
+                f"OpenRouter API error for {model_id}: {e.response.status_code}"
+            )
             return None
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.error(f"Failed to parse response from {model_id}: {e}")
@@ -111,12 +112,9 @@ class AIEngineService:
             logger.error(f"Unexpected error querying {model_id}: {e}")
             return None
 
-    async def query_all_models(
-        self, symbol: str, market_data: dict
-    ) -> list[dict]:
+    async def query_all_models(self, symbol: str, market_data: dict) -> list[dict]:
         tasks = [
-            self.query_model(model_id, symbol, market_data)
-            for model_id in self.models
+            self.query_model(model_id, symbol, market_data) for model_id in self.models
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -162,10 +160,18 @@ class AIEngineService:
             return None  # No consensus, HOLD
 
         # Average the consensus responses
-        avg_confidence = sum(r.get("confidence", 0.5) for r in consensus_responses) / len(consensus_responses)
-        avg_entry = sum(r.get("entry_price", 0) for r in consensus_responses) / len(consensus_responses)
-        avg_sl = sum(r.get("stop_loss", 0) for r in consensus_responses) / len(consensus_responses)
-        avg_tp = sum(r.get("take_profit", 0) for r in consensus_responses) / len(consensus_responses)
+        avg_confidence = sum(
+            r.get("confidence", 0.5) for r in consensus_responses
+        ) / len(consensus_responses)
+        avg_entry = sum(r.get("entry_price", 0) for r in consensus_responses) / len(
+            consensus_responses
+        )
+        avg_sl = sum(r.get("stop_loss", 0) for r in consensus_responses) / len(
+            consensus_responses
+        )
+        avg_tp = sum(r.get("take_profit", 0) for r in consensus_responses) / len(
+            consensus_responses
+        )
 
         # Aggregate indicators from first consensus response
         indicators = consensus_responses[0].get("indicators", {})

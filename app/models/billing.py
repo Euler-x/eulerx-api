@@ -28,9 +28,7 @@ if TYPE_CHECKING:
 class Plan(Base, TimestampMixin):
     __tablename__ = "plans"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     price_usd: Mapped[float] = mapped_column(
         Numeric(precision=10, scale=2), nullable=False
@@ -57,9 +55,7 @@ class Plan(Base, TimestampMixin):
 class Subscription(Base, TimestampMixin):
     __tablename__ = "subscriptions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -95,17 +91,13 @@ class Subscription(Base, TimestampMixin):
         back_populates="subscription", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (
-        Index("ix_subscriptions_user_status", "user_id", "status"),
-    )
+    __table_args__ = (Index("ix_subscriptions_user_status", "user_id", "status"),)
 
 
 class Payment(Base):
     __tablename__ = "payments"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     subscription_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("subscriptions.id", ondelete="CASCADE"),

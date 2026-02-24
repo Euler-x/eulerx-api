@@ -1,8 +1,6 @@
 import hashlib
 import hmac
 import logging
-from datetime import timedelta
-from typing import Optional
 
 import httpx
 from sqlalchemy import select
@@ -81,9 +79,7 @@ class BillingService:
             logger.error(f"Failed to check payment status: {e}")
             return None
 
-    def verify_webhook_signature(
-        self, payload_bytes: bytes, signature: str
-    ) -> bool:
+    def verify_webhook_signature(self, payload_bytes: bytes, signature: str) -> bool:
         if not self.ipn_secret:
             logger.warning("NOWPayments IPN secret not configured")
             return False
@@ -111,9 +107,7 @@ class BillingService:
 
         # Idempotency: check if this payment was already processed
         result = await db.execute(
-            select(Payment).where(
-                Payment.nowpayments_payment_id == payment_id
-            )
+            select(Payment).where(Payment.nowpayments_payment_id == payment_id)
         )
         existing_payment = result.scalar_one_or_none()
 
@@ -213,7 +207,9 @@ class BillingService:
             asset="USD",
             wallet_address_hash="",
             status=TransactionStatus.CONFIRMED,
-            description=f"Subscription activated: {plan.name}" if plan else "Subscription activated",
+            description=f"Subscription activated: {plan.name}"
+            if plan
+            else "Subscription activated",
         )
         db.add(transaction)
 
@@ -247,10 +243,12 @@ class BillingService:
             select(Subscription)
             .where(Subscription.user_id == user_id)
             .where(
-                Subscription.status.in_([
-                    SubscriptionStatus.ACTIVE,
-                    SubscriptionStatus.EXPIRING_SOON,
-                ])
+                Subscription.status.in_(
+                    [
+                        SubscriptionStatus.ACTIVE,
+                        SubscriptionStatus.EXPIRING_SOON,
+                    ]
+                )
             )
             .order_by(Subscription.created_at.desc())
             .limit(1)
