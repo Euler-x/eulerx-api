@@ -68,6 +68,12 @@ async def create_strategy(
         max_positions=data.max_positions,
         capital_allocation=data.capital_allocation,
         max_drawdown_percent=data.max_drawdown_percent,
+        daily_loss_cap_percent=data.daily_loss_cap_percent,
+        target_volatility=data.target_volatility,
+        expected_volatility=data.expected_volatility,
+        timeframe=data.timeframe,
+        target_return_min=data.target_return_min,
+        target_return_max=data.target_return_max,
     )
     db.add(strategy)
     await db.flush()

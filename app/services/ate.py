@@ -238,11 +238,18 @@ class ATEService:
 
         drawdown_percent = abs(min(0, daily_pnl)) / capital * 100
 
-        if drawdown_percent >= strategy.max_drawdown_percent:
+        # Use daily_loss_cap if set, otherwise fall back to max_drawdown_percent
+        effective_cap = strategy.daily_loss_cap_percent or strategy.max_drawdown_percent
+
+        if drawdown_percent >= effective_cap:
             strategy.is_active = False
+            strategy.paused_reason = (
+                f"Daily loss cap hit: {drawdown_percent:.1f}% >= {effective_cap}%"
+            )
+            strategy.paused_at = utc_now()
             logger.warning(
                 f"Strategy {strategy.id} auto-paused: drawdown {drawdown_percent:.1f}% "
-                f">= limit {strategy.max_drawdown_percent}%"
+                f">= limit {effective_cap}%"
             )
 
             # Send strategy paused notification
@@ -251,7 +258,7 @@ class ATEService:
                 await notification_service.send_strategy_paused(
                     user=user,
                     strategy_name=strategy.name,
-                    reason=f"Daily drawdown {drawdown_percent:.1f}% exceeded limit of {strategy.max_drawdown_percent}%",
+                    reason=strategy.paused_reason,
                 )
             except Exception as e:
                 logger.error("Failed to send strategy paused email: %s", e)

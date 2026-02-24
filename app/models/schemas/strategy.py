@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import RiskProfile, StrategyType
+from app.models.enums import RiskProfile, StrategyTimeframe, StrategyType
 
 
 class StrategyCreate(BaseModel):
@@ -15,6 +15,12 @@ class StrategyCreate(BaseModel):
     max_positions: int = Field(default=5, ge=1, le=50)
     capital_allocation: float = Field(..., gt=0)
     max_drawdown_percent: float = Field(default=10.0, ge=1.0, le=100.0)
+    daily_loss_cap_percent: Optional[float] = Field(None, ge=0.1, le=100.0)
+    target_volatility: Optional[float] = Field(None, ge=0)
+    expected_volatility: Optional[float] = Field(None, ge=0)
+    timeframe: Optional[StrategyTimeframe] = None
+    target_return_min: Optional[float] = Field(None, ge=0)
+    target_return_max: Optional[float] = Field(None, ge=0)
 
 
 class StrategyUpdate(BaseModel):
@@ -24,6 +30,12 @@ class StrategyUpdate(BaseModel):
     max_positions: Optional[int] = Field(None, ge=1, le=50)
     capital_allocation: Optional[float] = Field(None, gt=0)
     max_drawdown_percent: Optional[float] = Field(None, ge=1.0, le=100.0)
+    daily_loss_cap_percent: Optional[float] = Field(None, ge=0.1, le=100.0)
+    target_volatility: Optional[float] = Field(None, ge=0)
+    expected_volatility: Optional[float] = Field(None, ge=0)
+    timeframe: Optional[StrategyTimeframe] = None
+    target_return_min: Optional[float] = Field(None, ge=0)
+    target_return_max: Optional[float] = Field(None, ge=0)
 
 
 class StrategyResponse(BaseModel):
@@ -37,6 +49,14 @@ class StrategyResponse(BaseModel):
     capital_allocation: float
     max_drawdown_percent: float
     is_active: bool
+    daily_loss_cap_percent: Optional[float] = None
+    target_volatility: Optional[float] = None
+    expected_volatility: Optional[float] = None
+    timeframe: Optional[StrategyTimeframe] = None
+    target_return_min: Optional[float] = None
+    target_return_max: Optional[float] = None
+    paused_reason: Optional[str] = None
+    paused_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

@@ -14,6 +14,7 @@ from app.db.init_db import check_db_connection, dispose_engine
 from app.routers import (
     admin,
     ambassador,
+    analytics,
     auth,
     billing,
     execution,
@@ -24,6 +25,7 @@ from app.routers import (
     support,
     telegram,
     transactions,
+    transparency,
     worker_health,
 )
 from app.utils.rate_limiter import rate_limit_dependency
@@ -224,6 +226,8 @@ app.include_router(signals.router, prefix=prefix)
 app.include_router(execution.router, prefix=prefix)
 app.include_router(market.router, prefix=prefix)
 app.include_router(transactions.router, prefix=prefix)
+app.include_router(analytics.router, prefix=prefix)
+app.include_router(transparency.router, prefix=prefix)
 app.include_router(billing.router, prefix=prefix)
 app.include_router(ambassador.router, prefix=prefix)
 app.include_router(admin.router, prefix=prefix)

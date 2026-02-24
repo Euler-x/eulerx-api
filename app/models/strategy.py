@@ -1,14 +1,15 @@
 import uuid
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.types import GUID
 
 from app.db.base import Base, TimestampMixin
-from app.models.enums import RiskProfile, StrategyType
+from app.models.enums import RiskProfile, StrategyTimeframe, StrategyType
 
 if TYPE_CHECKING:
     from app.models.execution import Execution
@@ -40,6 +41,38 @@ class Strategy(Base, TimestampMixin):
     )
     max_drawdown_percent: Mapped[float] = mapped_column(Float, default=10.0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Risk management
+    daily_loss_cap_percent: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=None
+    )
+    target_volatility: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=None
+    )
+
+    # Strategy detail
+    expected_volatility: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=None
+    )
+    timeframe: Mapped[Optional[StrategyTimeframe]] = mapped_column(
+        SAEnum(StrategyTimeframe, name="strategy_timeframe_enum"),
+        nullable=True,
+        default=None,
+    )
+    target_return_min: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=None
+    )
+    target_return_max: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=None
+    )
+
+    # Auto-pause tracking
+    paused_reason: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None
+    )
+    paused_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
     user: Mapped["User"] = relationship(back_populates="strategies")
     signals: Mapped[list["Signal"]] = relationship(

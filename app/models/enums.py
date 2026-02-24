@@ -19,6 +19,13 @@ class RiskProfile(str, enum.Enum):
     HIGH = "high"
 
 
+class StrategyTimeframe(str, enum.Enum):
+    SCALPING = "scalping"
+    INTRADAY = "intraday"
+    SWING = "swing"
+    POSITION = "position"
+
+
 class SignalDirection(str, enum.Enum):
     BUY = "buy"
     SELL = "sell"
