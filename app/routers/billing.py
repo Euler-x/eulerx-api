@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.base import get_db
 from app.middleware.auth import require_verified_email
 from app.models.billing import Payment, Plan, Subscription
-from app.models.enums import PlanStatus, SubscriptionStatus
+from app.models.enums import PaymentStatus, PlanStatus, SubscriptionStatus
 from app.models.schemas.billing import (
     PaymentResponse,
     PlanResponse,
@@ -51,7 +51,7 @@ async def subscribe_to_plan(
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
 
-    # Check for existing active subscription
+    # Check for existing active or pending subscription
     existing_result = await db.execute(
         select(Subscription).where(
             Subscription.user_id == current_user.id,
@@ -63,12 +63,19 @@ async def subscribe_to_plan(
             ),
         )
     )
-    existing = existing_result.scalar_one_or_none()
-    if existing and existing.status == SubscriptionStatus.ACTIVE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already have an active subscription. Please cancel it first or wait for it to expire.",
-        )
+    existing_subs = existing_result.scalars().all()
+
+    for sub in existing_subs:
+        if sub.status == SubscriptionStatus.ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You already have an active subscription. Please cancel it first or wait for it to expire.",
+            )
+
+    # Cancel any existing pending subscriptions
+    for sub in existing_subs:
+        if sub.status == SubscriptionStatus.PENDING_PAYMENT:
+            sub.status = SubscriptionStatus.CANCELLED
 
     # Create NOWPayments invoice
     invoice = await billing_service.create_invoice(
@@ -86,19 +93,24 @@ async def subscribe_to_plan(
         plan_id=plan.id,
         status=SubscriptionStatus.PENDING_PAYMENT,
         nowpayments_invoice_id=invoice_id,
+        invoice_url=invoice_url,
     )
     db.add(subscription)
     await db.flush()
 
-    # Re-fetch with plan relationship
-    result = await db.execute(
-        select(Subscription).where(Subscription.id == subscription.id)
+    # Create initial payment record so it shows in payment history
+    payment = Payment(
+        subscription_id=subscription.id,
+        user_id=current_user.id,
+        amount_usd=float(plan.price_usd),
+        crypto_currency=request.pay_currency,
+        nowpayments_invoice_id=invoice_id,
+        status=PaymentStatus.WAITING,
     )
-    subscription = result.scalar_one()
+    db.add(payment)
 
     response = SubscriptionResponse.model_validate(subscription)
     response.plan = PlanResponse.model_validate(plan)
-    response.invoice_url = invoice_url
     return response
 
 

@@ -159,6 +159,18 @@ class BillingService:
             logger.warning(f"No subscription found for invoice {invoice_id}")
             return False
 
+        # If no existing payment by payment_id, check for a WAITING record
+        # created during subscription (matched by invoice_id)
+        if not existing_payment:
+            waiting_result = await db.execute(
+                select(Payment).where(
+                    Payment.nowpayments_invoice_id == invoice_id,
+                    Payment.nowpayments_payment_id.is_(None),
+                    Payment.status == PaymentStatus.WAITING,
+                )
+            )
+            existing_payment = waiting_result.scalar_one_or_none()
+
         # Map NOWPayments status to our status
         status_map = {
             "waiting": PaymentStatus.WAITING,
@@ -176,9 +188,13 @@ class BillingService:
 
         if existing_payment:
             existing_payment.status = mapped_status
-            if mapped_status == PaymentStatus.FINISHED:
+            existing_payment.nowpayments_payment_id = payment_id
+            existing_payment.nowpayments_invoice_id = invoice_id
+            if mapped_status in (PaymentStatus.FINISHED, PaymentStatus.CONFIRMED):
                 existing_payment.paid_at = utc_now()
+            if webhook_data.get("pay_amount"):
                 existing_payment.amount_crypto = webhook_data.get("pay_amount")
+            if webhook_data.get("pay_currency"):
                 existing_payment.crypto_currency = webhook_data.get("pay_currency")
         else:
             payment = Payment(

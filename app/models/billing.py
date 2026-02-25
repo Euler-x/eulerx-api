@@ -84,6 +84,9 @@ class Subscription(Base, TimestampMixin):
     nowpayments_invoice_id: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
+    invoice_url: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
 
     user: Mapped["User"] = relationship(back_populates="subscriptions")
     plan: Mapped["Plan"] = relationship(back_populates="subscriptions")
