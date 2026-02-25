@@ -30,16 +30,51 @@ class BillingService:
         self.ipn_secret = settings.nowpayments_ipn_secret
         self.base_url = settings.nowpayments_base_url
 
+    async def get_available_currencies(self) -> list[dict]:
+        if not self.api_key:
+            logger.warning("NOWPayments API key not configured")
+            return []
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/currencies",
+                    headers={"x-api-key": self.api_key},
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("currencies", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch NOWPayments currencies: {e}")
+            return []
+
     async def create_invoice(
         self,
         price_amount: float,
         price_currency: str = "usd",
+        pay_currency: str | None = None,
         order_id: str = "",
         order_description: str = "",
     ) -> dict | None:
         if not self.api_key:
             logger.warning("NOWPayments API key not configured")
             return None
+
+        frontend_url = settings.frontend_url.rstrip("/")
+        api_prefix = settings.api_v1_prefix
+
+        payload: dict = {
+            "price_amount": price_amount,
+            "price_currency": price_currency,
+            "order_id": order_id,
+            "order_description": order_description,
+            "ipn_callback_url": f"{frontend_url}{api_prefix}/billing/webhook/nowpayments",
+            "success_url": f"{frontend_url}/billing?payment=success",
+            "cancel_url": f"{frontend_url}/billing?payment=cancelled",
+        }
+
+        if pay_currency:
+            payload["pay_currency"] = pay_currency
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -49,13 +84,7 @@ class BillingService:
                         "x-api-key": self.api_key,
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "price_amount": price_amount,
-                        "price_currency": price_currency,
-                        "order_id": order_id,
-                        "order_description": order_description,
-                        "ipn_callback_url": "",
-                    },
+                    json=payload,
                 )
                 response.raise_for_status()
                 return response.json()

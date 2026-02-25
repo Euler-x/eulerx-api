@@ -54,6 +54,7 @@ class PlanResponse(BaseModel):
 
 class SubscribeRequest(BaseModel):
     plan_id: uuid.UUID
+    pay_currency: Optional[str] = None
 
 
 class SubscriptionResponse(BaseModel):
@@ -65,6 +66,7 @@ class SubscriptionResponse(BaseModel):
     expires_at: Optional[datetime]
     grace_until: Optional[datetime]
     nowpayments_invoice_id: Optional[str]
+    invoice_url: Optional[str] = None
     plan: Optional[PlanResponse] = None
     created_at: datetime
 

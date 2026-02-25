@@ -20,6 +20,12 @@ router = APIRouter(prefix="/billing", tags=["Billing"])
 billing_service = BillingService()
 
 
+@router.get("/currencies")
+async def list_currencies():
+    currencies = await billing_service.get_available_currencies()
+    return currencies
+
+
 @router.get("/plans", response_model=list[PlanResponse])
 async def list_plans(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -67,11 +73,13 @@ async def subscribe_to_plan(
     # Create NOWPayments invoice
     invoice = await billing_service.create_invoice(
         price_amount=float(plan.price_usd),
+        pay_currency=request.pay_currency,
         order_id=str(current_user.id),
         order_description=f"EulerX {plan.name} - {plan.billing_cycle.value}",
     )
 
     invoice_id = str(invoice.get("id", "")) if invoice else None
+    invoice_url = invoice.get("invoice_url") if invoice else None
 
     subscription = Subscription(
         user_id=current_user.id,
@@ -90,6 +98,7 @@ async def subscribe_to_plan(
 
     response = SubscriptionResponse.model_validate(subscription)
     response.plan = PlanResponse.model_validate(plan)
+    response.invoice_url = invoice_url
     return response
 
 
