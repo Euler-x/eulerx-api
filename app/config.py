@@ -159,6 +159,10 @@ class Settings(BaseSettings):
         default="https://eulerx.io",
         description="Frontend URL for email links",
     )
+    backend_url: str = Field(
+        default="https://api.eulerx.io",
+        description="Backend base URL used for webhook callbacks (e.g. NOWPayments IPN)",
+    )
 
     # Notification Rate Limiting
     notification_rate_limit_per_user: int = Field(

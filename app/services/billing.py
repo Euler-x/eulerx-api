@@ -60,6 +60,7 @@ class BillingService:
             logger.warning("NOWPayments API key not configured")
             return None
 
+        backend_url = settings.backend_url.rstrip("/")
         frontend_url = settings.frontend_url.rstrip("/")
         api_prefix = settings.api_v1_prefix
 
@@ -68,7 +69,7 @@ class BillingService:
             "price_currency": price_currency,
             "order_id": order_id,
             "order_description": order_description,
-            "ipn_callback_url": f"{frontend_url}{api_prefix}/billing/webhook/nowpayments",
+            "ipn_callback_url": f"{backend_url}{api_prefix}/billing/webhook/nowpayments",
             "success_url": f"{frontend_url}/billing?payment=success",
             "cancel_url": f"{frontend_url}/billing?payment=cancelled",
         }
