@@ -41,10 +41,20 @@ class Execution(Base):
     )
     wallet_address_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     order_type: Mapped[OrderType] = mapped_column(
-        SAEnum(OrderType, name="order_type_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
+        SAEnum(
+            OrderType,
+            name="order_type_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
     )
     direction: Mapped[SignalDirection] = mapped_column(
-        SAEnum(SignalDirection, name="signal_direction_enum", create_type=False, values_callable=lambda obj: [e.value for e in obj]),
+        SAEnum(
+            SignalDirection,
+            name="signal_direction_enum",
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         nullable=False,
     )
     entry_price: Mapped[float] = mapped_column(
@@ -62,7 +72,11 @@ class Execution(Base):
     )
     tx_hash: Mapped[Optional[str]] = mapped_column(String(66), nullable=True)
     status: Mapped[ExecutionStatus] = mapped_column(
-        SAEnum(ExecutionStatus, name="execution_status_enum", values_callable=lambda obj: [e.value for e in obj]),
+        SAEnum(
+            ExecutionStatus,
+            name="execution_status_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         default=ExecutionStatus.PENDING,
         nullable=False,
     )

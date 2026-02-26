@@ -30,7 +30,12 @@ class Signal(Base, TimestampMixin):
     )
     symbol: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     direction: Mapped[SignalDirection] = mapped_column(
-        SAEnum(SignalDirection, name="signal_direction_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
+        SAEnum(
+            SignalDirection,
+            name="signal_direction_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     entry_price: Mapped[float] = mapped_column(
@@ -45,7 +50,11 @@ class Signal(Base, TimestampMixin):
     risk_reward_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     indicators: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[SignalStatus] = mapped_column(
-        SAEnum(SignalStatus, name="signal_status_enum", values_callable=lambda obj: [e.value for e in obj]),
+        SAEnum(
+            SignalStatus,
+            name="signal_status_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         default=SignalStatus.NEW,
         nullable=False,
     )

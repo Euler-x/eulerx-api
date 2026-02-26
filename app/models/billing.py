@@ -34,7 +34,12 @@ class Plan(Base, TimestampMixin):
         Numeric(precision=10, scale=2), nullable=False
     )
     billing_cycle: Mapped[BillingCycle] = mapped_column(
-        SAEnum(BillingCycle, name="billing_cycle_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
+        SAEnum(
+            BillingCycle,
+            name="billing_cycle_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
     )
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     max_strategies: Mapped[int] = mapped_column(Integer, default=1)
@@ -44,7 +49,12 @@ class Plan(Base, TimestampMixin):
     ate_access: Mapped[bool] = mapped_column(Boolean, default=False)
     trial_days: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[PlanStatus] = mapped_column(
-        SAEnum(PlanStatus, name="plan_status_enum", values_callable=lambda obj: [e.value for e in obj]), default=PlanStatus.ACTIVE
+        SAEnum(
+            PlanStatus,
+            name="plan_status_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        default=PlanStatus.ACTIVE,
     )
 
     subscriptions: Mapped[list["Subscription"]] = relationship(
@@ -68,7 +78,11 @@ class Subscription(Base, TimestampMixin):
         nullable=False,
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
-        SAEnum(SubscriptionStatus, name="subscription_status_enum", values_callable=lambda obj: [e.value for e in obj]),
+        SAEnum(
+            SubscriptionStatus,
+            name="subscription_status_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         default=SubscriptionStatus.INACTIVE,
         nullable=False,
     )
@@ -124,7 +138,11 @@ class Payment(Base):
         String(100), nullable=True
     )
     status: Mapped[PaymentStatus] = mapped_column(
-        SAEnum(PaymentStatus, name="payment_status_enum", values_callable=lambda obj: [e.value for e in obj]),
+        SAEnum(
+            PaymentStatus,
+            name="payment_status_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         default=PaymentStatus.WAITING,
         nullable=False,
     )

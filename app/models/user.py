@@ -29,7 +29,12 @@ class User(Base, TimestampMixin):
     )
     wallet_address: Mapped[Optional[str]] = mapped_column(String(42), nullable=True)
     wallet_type: Mapped[Optional[WalletType]] = mapped_column(
-        SAEnum(WalletType, name="wallet_type_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=True
+        SAEnum(
+            WalletType,
+            name="wallet_type_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=True,
     )
     encrypted_private_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
