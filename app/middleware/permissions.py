@@ -27,13 +27,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, status
-
-if TYPE_CHECKING:
-    from app.models.schemas.billing import PlanFeatures
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+if TYPE_CHECKING:
+    from app.models.schemas.billing import PlanFeatures
 
 from app.db.base import get_db
 from app.models.billing import Plan, Subscription
