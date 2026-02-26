@@ -5,28 +5,26 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import require_verified_email
-from app.middleware.subscription import (
-    SubscriptionInfo,
-    get_subscription_info,
-    require_active_subscription,
+from app.middleware.permissions import (
+    RequireSubscribed,
+    RequireVerified,
+    UserPermissions,
 )
 from app.models.schemas.common import MessageResponse
 from app.models.schemas.strategy import StrategyCreate, StrategyResponse, StrategyUpdate
 from app.models.strategy import Strategy
-from app.models.user import User
 
 router = APIRouter(prefix="/strategies", tags=["Strategies"])
 
 
 @router.get("", response_model=list[StrategyResponse])
 async def list_strategies(
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy)
-        .where(Strategy.user_id == current_user.id)
+        .where(Strategy.user_id == perms.id)
         .order_by(Strategy.created_at.desc())
     )
     strategies = result.scalars().all()
@@ -36,31 +34,30 @@ async def list_strategies(
 @router.post("", response_model=StrategyResponse, status_code=status.HTTP_201_CREATED)
 async def create_strategy(
     data: StrategyCreate,
-    current_user: User = Depends(require_verified_email),
-    sub_info: SubscriptionInfo = Depends(get_subscription_info),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     # Enforce plan limits if subscription exists
-    if sub_info.is_active and sub_info.max_strategies > 0:
+    if perms.is_subscribed and perms.max_strategies > 0:
         count_result = await db.execute(
-            select(func.count(Strategy.id)).where(Strategy.user_id == current_user.id)
+            select(func.count(Strategy.id)).where(Strategy.user_id == perms.id)
         )
         current_count = count_result.scalar() or 0
-        if current_count >= sub_info.max_strategies:
+        if current_count >= perms.max_strategies:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Maximum strategies ({sub_info.max_strategies}) reached for your plan.",
+                detail=f"Maximum strategies ({perms.max_strategies}) reached for your plan.",
             )
 
-    if sub_info.is_active and sub_info.max_allocation > 0:
-        if data.capital_allocation > sub_info.max_allocation:
+    if perms.is_subscribed and perms.max_allocation > 0:
+        if data.capital_allocation > perms.max_allocation:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Capital allocation exceeds plan limit of {sub_info.max_allocation}.",
+                detail=f"Capital allocation exceeds plan limit of {perms.max_allocation}.",
             )
 
     strategy = Strategy(
-        user_id=current_user.id,
+        user_id=perms.id,
         name=data.name,
         strategy_type=data.strategy_type,
         risk_profile=data.risk_profile,
@@ -84,13 +81,13 @@ async def create_strategy(
 @router.get("/{strategy_id}", response_model=StrategyResponse)
 async def get_strategy(
     strategy_id: uuid.UUID,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy).where(
             Strategy.id == strategy_id,
-            Strategy.user_id == current_user.id,
+            Strategy.user_id == perms.id,
         )
     )
     strategy = result.scalar_one_or_none()
@@ -103,13 +100,13 @@ async def get_strategy(
 async def update_strategy(
     strategy_id: uuid.UUID,
     data: StrategyUpdate,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy).where(
             Strategy.id == strategy_id,
-            Strategy.user_id == current_user.id,
+            Strategy.user_id == perms.id,
         )
     )
     strategy = result.scalar_one_or_none()
@@ -128,13 +125,13 @@ async def update_strategy(
 @router.delete("/{strategy_id}", response_model=MessageResponse)
 async def delete_strategy(
     strategy_id: uuid.UUID,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy).where(
             Strategy.id == strategy_id,
-            Strategy.user_id == current_user.id,
+            Strategy.user_id == perms.id,
         )
     )
     strategy = result.scalar_one_or_none()
@@ -154,14 +151,13 @@ async def delete_strategy(
 @router.post("/{strategy_id}/activate", response_model=StrategyResponse)
 async def activate_strategy(
     strategy_id: uuid.UUID,
-    current_user: User = Depends(require_verified_email),
-    sub_info: SubscriptionInfo = Depends(require_active_subscription),
+    perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy).where(
             Strategy.id == strategy_id,
-            Strategy.user_id == current_user.id,
+            Strategy.user_id == perms.id,
         )
     )
     strategy = result.scalar_one_or_none()
@@ -177,13 +173,13 @@ async def activate_strategy(
 @router.post("/{strategy_id}/pause", response_model=StrategyResponse)
 async def pause_strategy(
     strategy_id: uuid.UUID,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy).where(
             Strategy.id == strategy_id,
-            Strategy.user_id == current_user.id,
+            Strategy.user_id == perms.id,
         )
     )
     strategy = result.scalar_one_or_none()

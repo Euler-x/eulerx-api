@@ -19,7 +19,7 @@ Sub-modules:
 
 from fastapi import APIRouter, Depends
 
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import _require_admin
 from app.routers.admin.plans import router as plans_router
 from app.routers.admin.config import router as config_router
 from app.routers.admin.users import router as users_router
@@ -38,7 +38,7 @@ from app.routers.admin.audit_logs import router as audit_logs_router
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
-    dependencies=[Depends(get_admin_user)],
+    dependencies=[Depends(_require_admin)],
 )
 
 router.include_router(plans_router)

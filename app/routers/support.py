@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.permissions import RequireAuth, UserPermissions
 from app.models.enums import TicketStatus
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.support import (
@@ -17,7 +17,6 @@ from app.models.schemas.support import (
     TicketDetailResponse,
 )
 from app.models.support import SupportMessage, SupportTicket
-from app.models.user import User
 
 router = APIRouter(prefix="/support", tags=["Support"])
 
@@ -25,11 +24,11 @@ router = APIRouter(prefix="/support", tags=["Support"])
 @router.post("/tickets", response_model=SupportTicketResponse, status_code=201)
 async def create_ticket(
     data: TicketCreate,
-    current_user: User = Depends(get_current_user),
+    perms: UserPermissions = RequireAuth,
     db: AsyncSession = Depends(get_db),
 ):
     ticket = SupportTicket(
-        user_id=current_user.id,
+        user_id=perms.id,
         subject=data.subject,
         description=data.description,
         priority=data.priority,
@@ -44,16 +43,16 @@ async def list_tickets(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: TicketStatus | None = None,
-    current_user: User = Depends(get_current_user),
+    perms: UserPermissions = RequireAuth,
     db: AsyncSession = Depends(get_db),
 ):
     query = (
         select(SupportTicket)
-        .where(SupportTicket.user_id == current_user.id)
+        .where(SupportTicket.user_id == perms.id)
         .order_by(SupportTicket.created_at.desc())
     )
     count_query = select(func.count(SupportTicket.id)).where(
-        SupportTicket.user_id == current_user.id
+        SupportTicket.user_id == perms.id
     )
 
     if status:
@@ -79,7 +78,7 @@ async def list_tickets(
 @router.get("/tickets/{ticket_id}", response_model=TicketDetailResponse)
 async def get_ticket(
     ticket_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    perms: UserPermissions = RequireAuth,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -87,7 +86,7 @@ async def get_ticket(
         .options(selectinload(SupportTicket.messages))
         .where(
             SupportTicket.id == ticket_id,
-            SupportTicket.user_id == current_user.id,
+            SupportTicket.user_id == perms.id,
         )
     )
     ticket = result.scalar_one_or_none()
@@ -104,13 +103,13 @@ async def get_ticket(
 async def add_message(
     ticket_id: uuid.UUID,
     data: MessageCreate,
-    current_user: User = Depends(get_current_user),
+    perms: UserPermissions = RequireAuth,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(SupportTicket).where(
             SupportTicket.id == ticket_id,
-            SupportTicket.user_id == current_user.id,
+            SupportTicket.user_id == perms.id,
         )
     )
     ticket = result.scalar_one_or_none()
@@ -124,9 +123,9 @@ async def add_message(
 
     message = SupportMessage(
         ticket_id=ticket.id,
-        user_id=current_user.id,
+        user_id=perms.id,
         message=data.message,
-        is_admin=current_user.is_admin,
+        is_admin=perms.is_admin,
     )
     db.add(message)
     await db.flush()

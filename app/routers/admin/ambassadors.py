@@ -9,13 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.ambassador import Ambassador
 from app.models.enums import AmbassadorRank
 from app.models.schemas.admin import AdminAmbassadorUpdate
 from app.models.schemas.ambassador import AmbassadorResponse
 from app.models.schemas.common import PaginatedResponse
-from app.models.user import User
 
 router = APIRouter()
 
@@ -70,7 +69,7 @@ async def admin_update_ambassador(
     data: AdminAmbassadorUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(Ambassador).where(Ambassador.id == ambassador_id))
     ambassador = result.scalar_one_or_none()
@@ -86,7 +85,7 @@ async def admin_update_ambassador(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_update_ambassador",
         resource_type="ambassador",
         resource_id=str(ambassador_id),

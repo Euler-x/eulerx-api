@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.enums import TicketStatus
 from app.models.support import SupportMessage, SupportTicket
 from app.models.user import User
@@ -92,7 +92,7 @@ async def admin_update_ticket_status(
 async def admin_reply_to_ticket(
     ticket_id: uuid.UUID,
     data: MessageCreate,
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -104,7 +104,7 @@ async def admin_reply_to_ticket(
 
     message = SupportMessage(
         ticket_id=ticket.id,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         message=data.message,
         is_admin=True,
     )

@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import require_verified_email
+from app.middleware.permissions import RequireVerified, UserPermissions
 from app.models.billing import Payment, Plan, Subscription
 from app.models.enums import PaymentStatus, PlanStatus, SubscriptionStatus
 from app.models.schemas.billing import (
@@ -13,7 +13,6 @@ from app.models.schemas.billing import (
     SubscriptionResponse,
 )
 from app.models.schemas.common import MessageResponse
-from app.models.user import User
 from app.services.billing import BillingService
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -40,7 +39,7 @@ async def list_plans(db: AsyncSession = Depends(get_db)):
 @router.post("/subscribe", response_model=SubscriptionResponse)
 async def subscribe_to_plan(
     request: SubscribeRequest,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     # Check plan exists and is active
@@ -54,7 +53,7 @@ async def subscribe_to_plan(
     # Check for existing active or pending subscription
     existing_result = await db.execute(
         select(Subscription).where(
-            Subscription.user_id == current_user.id,
+            Subscription.user_id == perms.id,
             Subscription.status.in_(
                 [
                     SubscriptionStatus.ACTIVE,
@@ -81,7 +80,7 @@ async def subscribe_to_plan(
     invoice = await billing_service.create_invoice(
         price_amount=float(plan.price_usd),
         pay_currency=request.pay_currency,
-        order_id=str(current_user.id),
+        order_id=str(perms.id),
         order_description=f"EulerX {plan.name} - {plan.billing_cycle.value}",
     )
 
@@ -89,7 +88,7 @@ async def subscribe_to_plan(
     invoice_url = invoice.get("invoice_url") if invoice else None
 
     subscription = Subscription(
-        user_id=current_user.id,
+        user_id=perms.id,
         plan_id=plan.id,
         status=SubscriptionStatus.PENDING_PAYMENT,
         nowpayments_invoice_id=invoice_id,
@@ -101,7 +100,7 @@ async def subscribe_to_plan(
     # Create initial payment record so it shows in payment history
     payment = Payment(
         subscription_id=subscription.id,
-        user_id=current_user.id,
+        user_id=perms.id,
         amount_usd=float(plan.price_usd),
         crypto_currency=request.pay_currency,
         nowpayments_invoice_id=invoice_id,
@@ -116,12 +115,12 @@ async def subscribe_to_plan(
 
 @router.get("/subscription", response_model=SubscriptionResponse | None)
 async def get_current_subscription(
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Subscription)
-        .where(Subscription.user_id == current_user.id)
+        .where(Subscription.user_id == perms.id)
         .order_by(Subscription.created_at.desc())
         .limit(1)
     )
@@ -140,12 +139,12 @@ async def get_current_subscription(
 
 @router.get("/payments", response_model=list[PaymentResponse])
 async def list_payments(
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Payment)
-        .where(Payment.user_id == current_user.id)
+        .where(Payment.user_id == perms.id)
         .order_by(Payment.created_at.desc())
     )
     payments = result.scalars().all()

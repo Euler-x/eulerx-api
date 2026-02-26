@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
-from app.middleware.subscription import SubscriptionInfo, require_active_subscription
+from app.middleware.permissions import RequireSubscribed, UserPermissions
 from app.models.enums import SignalDirection, SignalStatus
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.signal import SignalDetailResponse, SignalResponse
@@ -23,7 +23,7 @@ async def list_signals(
     symbol: Optional[str] = None,
     direction: Optional[SignalDirection] = None,
     status: Optional[SignalStatus] = None,
-    sub_info: SubscriptionInfo = Depends(require_active_subscription),
+    perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Signal).order_by(Signal.created_at.desc())
@@ -57,7 +57,7 @@ async def list_signals(
 
 @router.get("/live", response_model=list[SignalResponse])
 async def get_live_signals(
-    sub_info: SubscriptionInfo = Depends(require_active_subscription),
+    perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -73,7 +73,7 @@ async def get_live_signals(
 async def get_signal_history(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    sub_info: SubscriptionInfo = Depends(require_active_subscription),
+    perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
     query = (
@@ -118,7 +118,7 @@ async def get_signal_history(
 @router.get("/{signal_id}", response_model=SignalDetailResponse)
 async def get_signal_detail(
     signal_id: uuid.UUID,
-    sub_info: SubscriptionInfo = Depends(require_active_subscription),
+    perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

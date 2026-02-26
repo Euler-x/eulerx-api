@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.billing import Plan, Subscription
 from app.models.enums import SubscriptionStatus
 from app.models.schemas.admin import AdminSubscriptionCreate
@@ -57,12 +57,13 @@ async def admin_create_subscription(
     data: AdminSubscriptionCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     """Manually grant a subscription to a user."""
     # Validate user exists
     user_result = await db.execute(select(User).where(User.id == data.user_id))
-    if user_result.scalar_one_or_none() is None:
+    target_user = user_result.scalar_one_or_none()
+    if target_user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Validate plan exists
@@ -79,9 +80,14 @@ async def admin_create_subscription(
     db.add(subscription)
     await db.flush()
 
+    # Sync denormalized flag on the target user
+    _active_statuses = {SubscriptionStatus.ACTIVE, SubscriptionStatus.EXPIRING_SOON}
+    if target_user is not None:
+        target_user.is_subscribed = data.status in _active_statuses
+
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_create_subscription",
         resource_type="subscription",
         resource_id=str(subscription.id),
@@ -102,7 +108,7 @@ async def admin_override_subscription(
     data: SubscriptionOverride,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(
         select(Subscription).where(Subscription.id == subscription_id)
@@ -118,11 +124,18 @@ async def admin_override_subscription(
     if data.grace_until is not None:
         subscription.grace_until = data.grace_until
 
+    # Sync denormalized is_subscribed flag on the user
+    _active_statuses = {SubscriptionStatus.ACTIVE, SubscriptionStatus.EXPIRING_SOON}
+    user_r = await db.execute(select(User).where(User.id == subscription.user_id))
+    sub_user = user_r.scalar_one_or_none()
+    if sub_user is not None:
+        sub_user.is_subscribed = data.status in _active_statuses
+
     await db.flush()
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_override_subscription",
         resource_type="subscription",
         resource_id=str(subscription_id),
@@ -138,7 +151,7 @@ async def admin_cancel_subscription(
     subscription_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(
         select(Subscription).where(Subscription.id == subscription_id)
@@ -155,11 +168,18 @@ async def admin_cancel_subscription(
 
     old_status = subscription.status.value
     subscription.status = SubscriptionStatus.CANCELLED
+
+    # Clear the denormalized flag on the user
+    user_r = await db.execute(select(User).where(User.id == subscription.user_id))
+    sub_user = user_r.scalar_one_or_none()
+    if sub_user is not None:
+        sub_user.is_subscribed = False
+
     await db.flush()
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_cancel_subscription",
         resource_type="subscription",
         resource_id=str(subscription_id),

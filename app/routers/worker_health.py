@@ -1,16 +1,15 @@
 """Worker health check and manual trigger endpoints (admin-only)."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.middleware.auth import get_admin_user
-from app.models.user import User
+from app.middleware.permissions import RequireAdmin, UserPermissions
 
 router = APIRouter(prefix="/workers", tags=["Workers"])
 
 
 @router.get("/health")
 async def worker_health(
-    current_user: User = Depends(get_admin_user),
+    perms: UserPermissions = RequireAdmin,
 ):
     """Check Celery worker and Redis broker health."""
     from app.worker.health import get_worker_health
@@ -20,7 +19,7 @@ async def worker_health(
 
 @router.post("/trigger-analysis")
 async def trigger_analysis(
-    current_user: User = Depends(get_admin_user),
+    perms: UserPermissions = RequireAdmin,
 ):
     """Manually trigger the analysis pipeline outside the Beat schedule."""
     from app.worker.tasks import run_analysis_pipeline

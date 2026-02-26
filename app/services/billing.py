@@ -258,12 +258,16 @@ class BillingService:
         )
         db.add(transaction)
 
+        # Sync denormalized is_subscribed flag
+        user_result = await db.execute(
+            select(User).where(User.id == subscription.user_id)
+        )
+        user = user_result.scalar_one_or_none()
+        if user:
+            user.is_subscribed = True
+
         # Send subscription activated email
         try:
-            user_result = await db.execute(
-                select(User).where(User.id == subscription.user_id)
-            )
-            user = user_result.scalar_one_or_none()
             if user:
                 notification_service = NotificationService()
                 expires_str = (

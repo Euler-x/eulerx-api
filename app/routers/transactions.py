@@ -6,12 +6,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import require_verified_email
+from app.middleware.permissions import RequireVerified, UserPermissions
 from app.models.enums import TransactionCategory, TransactionStatus
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.transaction import TransactionResponse
 from app.models.transaction import Transaction
-from app.models.user import User
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
@@ -24,16 +23,16 @@ async def list_transactions(
     status: Optional[TransactionStatus] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     query = (
         select(Transaction)
-        .where(Transaction.user_id == current_user.id)
+        .where(Transaction.user_id == perms.id)
         .order_by(Transaction.created_at.desc())
     )
     count_query = select(func.count(Transaction.id)).where(
-        Transaction.user_id == current_user.id
+        Transaction.user_id == perms.id
     )
 
     if category:

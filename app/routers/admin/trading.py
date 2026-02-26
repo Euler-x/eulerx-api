@@ -15,10 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.admin_config import AdminConfig
 from app.models.strategy import Strategy
-from app.models.user import User
 
 router = APIRouter()
 
@@ -61,7 +60,7 @@ async def _upsert_halt_config(db: AsyncSession, value: dict) -> AdminConfig:
 @router.get("/trading/status")
 async def trading_status(
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     """Check whether trading is currently halted."""
     config = await _get_halt_config(db)
@@ -79,7 +78,7 @@ async def trading_status(
 async def halt_trading(
     body: HaltRequest = HaltRequest(),
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     """Emergency kill switch — deactivates all active strategies immediately.
 
@@ -115,14 +114,14 @@ async def halt_trading(
             "halted": True,
             "halted_strategy_ids": active_ids,
             "reason": body.reason,
-            "halted_by": str(current_admin.id),
+            "halted_by": str(admin_perms.user.id),
         },
     )
 
     # Audit log — committed atomically by get_db dependency
     await log_audit(
         db=db,
-        user_id=current_admin.id,
+        user_id=admin_perms.user.id,
         action="TRADING_HALT",
         details={
             "halted_count": len(active_ids),
@@ -141,7 +140,7 @@ async def halt_trading(
 async def resume_trading(
     body: ResumeRequest = ResumeRequest(),
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     """Resume trading — re-enables only the strategies that were active before
     the halt, leaving user-deactivated strategies untouched.
@@ -170,7 +169,7 @@ async def resume_trading(
     # Audit log — committed atomically by get_db dependency
     await log_audit(
         db=db,
-        user_id=current_admin.id,
+        user_id=admin_perms.user.id,
         action="TRADING_RESUME",
         details={
             "resumed_count": resumed_count,

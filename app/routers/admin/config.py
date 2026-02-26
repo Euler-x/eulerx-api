@@ -6,11 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.admin_config import AdminConfig
 from app.models.schemas.admin import AdminConfigResponse, AdminConfigUpdate
 from app.models.schemas.common import MessageResponse
-from app.models.user import User
 
 router = APIRouter()
 
@@ -39,7 +38,7 @@ async def admin_set_config(
     data: AdminConfigUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(AdminConfig).where(AdminConfig.key == key))
     config = result.scalar_one_or_none()
@@ -56,7 +55,7 @@ async def admin_set_config(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_set_config",
         resource_type="admin_config",
         resource_id=key,
@@ -71,7 +70,7 @@ async def admin_delete_config(
     key: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     if key in PROTECTED_KEYS:
         raise HTTPException(
@@ -88,7 +87,7 @@ async def admin_delete_config(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_delete_config",
         resource_type="admin_config",
         resource_id=key,

@@ -5,14 +5,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import require_verified_email
+from app.middleware.permissions import RequireVerified, UserPermissions
 from app.models.schemas.analytics import (
     AnalyticsOverviewResponse,
     EquityCurvePoint,
     StrategyAnalyticsResponse,
 )
 from app.models.strategy import Strategy
-from app.models.user import User
 from app.services.analytics import AnalyticsService
 
 from sqlalchemy import select
@@ -23,10 +22,10 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 @router.get("/overview", response_model=AnalyticsOverviewResponse)
 async def get_analytics_overview(
     days: int = Query(default=30, ge=1, le=365),
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    data = await AnalyticsService.compute(db, current_user.id, days=days)
+    data = await AnalyticsService.compute(db, perms.id, days=days)
     return AnalyticsOverviewResponse(**data)
 
 
@@ -34,13 +33,13 @@ async def get_analytics_overview(
 async def get_strategy_analytics(
     strategy_id: uuid.UUID,
     days: int = Query(default=30, ge=1, le=365),
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Strategy).where(
             Strategy.id == strategy_id,
-            Strategy.user_id == current_user.id,
+            Strategy.user_id == perms.id,
         )
     )
     strategy = result.scalar_one_or_none()
@@ -50,7 +49,7 @@ async def get_strategy_analytics(
         raise HTTPException(status_code=404, detail="Strategy not found")
 
     data = await AnalyticsService.compute(
-        db, current_user.id, strategy_id=strategy_id, days=days
+        db, perms.id, strategy_id=strategy_id, days=days
     )
     return StrategyAnalyticsResponse(
         **data,
@@ -63,10 +62,10 @@ async def get_strategy_analytics(
 async def get_equity_curve(
     days: int = Query(default=30, ge=1, le=365),
     strategy_id: Optional[uuid.UUID] = Query(default=None),
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     curve = await AnalyticsService.compute_equity_curve(
-        db, current_user.id, strategy_id=strategy_id, days=days
+        db, perms.id, strategy_id=strategy_id, days=days
     )
     return [EquityCurvePoint(**point) for point in curve]

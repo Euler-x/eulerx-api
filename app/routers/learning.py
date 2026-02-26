@@ -5,17 +5,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.permissions import RequireAuth, UserPermissions
 from app.models.content import LearningContent
 from app.models.schemas.content import LearningContentResponse
-from app.models.user import User
 
 router = APIRouter(prefix="/learning", tags=["Learning Hub"])
 
 
 @router.get("/content", response_model=list[LearningContentResponse])
 async def list_published_content(
-    current_user: User = Depends(get_current_user),
+    perms: UserPermissions = RequireAuth,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -30,7 +29,7 @@ async def list_published_content(
 @router.get("/content/{content_id}", response_model=LearningContentResponse)
 async def get_content_detail(
     content_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    perms: UserPermissions = RequireAuth,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

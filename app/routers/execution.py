@@ -5,12 +5,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import require_verified_email
+from app.middleware.permissions import RequireVerified, UserPermissions
 from app.models.enums import ExecutionStatus
 from app.models.execution import Execution
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.execution import ExecutionResponse, ExecutionVerifyResponse
-from app.models.user import User
 from app.services.verification import VerificationService
 
 router = APIRouter(prefix="/executions", tags=["Executions"])
@@ -21,17 +20,15 @@ async def list_executions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: ExecutionStatus | None = None,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     query = (
         select(Execution)
-        .where(Execution.user_id == current_user.id)
+        .where(Execution.user_id == perms.id)
         .order_by(Execution.created_at.desc())
     )
-    count_query = select(func.count(Execution.id)).where(
-        Execution.user_id == current_user.id
-    )
+    count_query = select(func.count(Execution.id)).where(Execution.user_id == perms.id)
 
     if status:
         query = query.where(Execution.status == status)
@@ -56,13 +53,13 @@ async def list_executions(
 @router.get("/{execution_id}", response_model=ExecutionResponse)
 async def get_execution(
     execution_id: uuid.UUID,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Execution).where(
             Execution.id == execution_id,
-            Execution.user_id == current_user.id,
+            Execution.user_id == perms.id,
         )
     )
     execution = result.scalar_one_or_none()
@@ -74,13 +71,13 @@ async def get_execution(
 @router.get("/{execution_id}/verify", response_model=ExecutionVerifyResponse)
 async def verify_execution(
     execution_id: uuid.UUID,
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Execution).where(
             Execution.id == execution_id,
-            Execution.user_id == current_user.id,
+            Execution.user_id == perms.id,
         )
     )
     execution = result.scalar_one_or_none()

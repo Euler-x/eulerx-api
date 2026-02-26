@@ -3,14 +3,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import require_verified_email
+from app.middleware.permissions import RequireVerified, UserPermissions
 from app.models.ambassador import Ambassador
 from app.models.schemas.ambassador import (
     AmbassadorResponse,
     LeaderboardEntry,
     ReferralResponse,
 )
-from app.models.user import User
 from app.config import get_settings
 from app.utils.helpers import generate_referral_code
 
@@ -21,12 +20,10 @@ router = APIRouter(prefix="/ambassador", tags=["Ambassador"])
 
 @router.get("", response_model=AmbassadorResponse | None)
 async def get_ambassador_dashboard(
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ambassador).where(Ambassador.user_id == current_user.id)
-    )
+    result = await db.execute(select(Ambassador).where(Ambassador.user_id == perms.id))
     ambassador = result.scalar_one_or_none()
     if ambassador is None:
         return None
@@ -36,7 +33,7 @@ async def get_ambassador_dashboard(
 @router.get("/leaderboard", response_model=list[LeaderboardEntry])
 async def get_leaderboard(
     limit: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -58,18 +55,16 @@ async def get_leaderboard(
 
 @router.post("/referral", response_model=ReferralResponse)
 async def generate_referral(
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ambassador).where(Ambassador.user_id == current_user.id)
-    )
+    result = await db.execute(select(Ambassador).where(Ambassador.user_id == perms.id))
     ambassador = result.scalar_one_or_none()
 
     if ambassador is None:
         code = generate_referral_code()
         ambassador = Ambassador(
-            user_id=current_user.id,
+            user_id=perms.id,
             referral_code=code,
         )
         db.add(ambassador)
@@ -83,12 +78,10 @@ async def generate_referral(
 
 @router.get("/team", response_model=list[AmbassadorResponse])
 async def get_team(
-    current_user: User = Depends(require_verified_email),
+    perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ambassador).where(Ambassador.user_id == current_user.id)
-    )
+    result = await db.execute(select(Ambassador).where(Ambassador.user_id == perms.id))
     ambassador = result.scalar_one_or_none()
 
     if ambassador is None:

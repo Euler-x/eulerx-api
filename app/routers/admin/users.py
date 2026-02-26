@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.billing import Subscription
 from app.models.execution import Execution
 from app.models.schemas.admin import AdminUserDetailResponse, AdminUserUpdate
@@ -108,7 +108,7 @@ async def admin_update_user(
     data: AdminUserUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -123,7 +123,7 @@ async def admin_update_user(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_update_user",
         resource_type="user",
         resource_id=str(user_id),
@@ -139,7 +139,7 @@ async def admin_toggle_admin(
     user_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -151,7 +151,7 @@ async def admin_toggle_admin(
 
     await log_audit(
         db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="toggle_admin",
         resource_type="user",
         resource_id=str(user_id),
@@ -167,7 +167,7 @@ async def admin_toggle_active(
     user_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -180,7 +180,7 @@ async def admin_toggle_active(
     action = "unban_user" if user.is_active else "ban_user"
     await log_audit(
         db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action=action,
         resource_type="user",
         resource_id=str(user_id),

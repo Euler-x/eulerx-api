@@ -9,13 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.enums import RiskProfile, StrategyType
 from app.models.schemas.admin import AdminStrategyUpdate
 from app.models.schemas.common import MessageResponse, PaginatedResponse
 from app.models.schemas.strategy import StrategyResponse
 from app.models.strategy import Strategy
-from app.models.user import User
 
 router = APIRouter()
 
@@ -78,7 +77,7 @@ async def admin_update_strategy(
     data: AdminStrategyUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
@@ -94,7 +93,7 @@ async def admin_update_strategy(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_update_strategy",
         resource_type="strategy",
         resource_id=str(strategy_id),
@@ -110,7 +109,7 @@ async def admin_deactivate_strategy(
     strategy_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
@@ -122,7 +121,7 @@ async def admin_deactivate_strategy(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_deactivate_strategy",
         resource_type="strategy",
         resource_id=str(strategy_id),
@@ -137,7 +136,7 @@ async def admin_delete_strategy(
     strategy_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(Strategy).where(Strategy.id == strategy_id))
     strategy = result.scalar_one_or_none()
@@ -146,7 +145,7 @@ async def admin_delete_strategy(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_delete_strategy",
         resource_type="strategy",
         resource_id=str(strategy_id),

@@ -10,12 +10,11 @@ from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
-from app.middleware.auth import get_admin_user
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.enums import SignalDirection, SignalStatus
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.signal import SignalDetailResponse, SignalResponse
 from app.models.signal import Signal
-from app.models.user import User
 
 router = APIRouter()
 
@@ -79,7 +78,7 @@ async def admin_cancel_signal(
     signal_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin_user: User = Depends(get_admin_user),
+    admin_perms: UserPermissions = RequireAdmin,
 ):
     result = await db.execute(select(Signal).where(Signal.id == signal_id))
     signal = result.scalar_one_or_none()
@@ -97,7 +96,7 @@ async def admin_cancel_signal(
 
     await log_audit(
         db=db,
-        user_id=admin_user.id,
+        user_id=admin_perms.user.id,
         action="admin_cancel_signal",
         resource_type="signal",
         resource_id=str(signal_id),
