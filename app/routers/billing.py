@@ -14,6 +14,8 @@ from app.models.schemas.billing import (
 )
 from app.models.schemas.common import MessageResponse
 from app.services.billing import BillingService
+from app.services.plan_enforcement import PlanEnforcer
+from app.utils.helpers import add_days, utc_now
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 billing_service = BillingService()
@@ -76,7 +78,33 @@ async def subscribe_to_plan(
         if sub.status == SubscriptionStatus.PENDING_PAYMENT:
             sub.status = SubscriptionStatus.CANCELLED
 
-    # Create NOWPayments invoice
+    # ── Trial path ─────────────────────────────────────────────────────────
+    # When the plan offers a free trial, activate it directly (no payment).
+    if plan.trial_days > 0:
+        await PlanEnforcer.trial_eligibility(db, perms.id)
+
+        now = utc_now()
+        trial_expires = add_days(now, plan.trial_days)
+
+        subscription = Subscription(
+            user_id=perms.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=now,
+            expires_at=trial_expires,
+        )
+        db.add(subscription)
+        await db.flush()
+
+        # Sync denormalized flag
+        perms.user.is_subscribed = True
+
+        response = SubscriptionResponse.model_validate(subscription)
+        response.plan = PlanResponse.model_validate(plan)
+        return response
+
+    # ── Paid path ───────────────────────────────────────────────────────────
+    # Create NOWPayments invoice and hold subscription in PENDING_PAYMENT.
     invoice = await billing_service.create_invoice(
         price_amount=float(plan.price_usd),
         pay_currency=request.pay_currency,

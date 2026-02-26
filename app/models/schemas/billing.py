@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     BillingCycle,
@@ -10,6 +10,49 @@ from app.models.enums import (
     PlanStatus,
     SubscriptionStatus,
 )
+
+
+class PlanFeatures(BaseModel):
+    """Typed wrapper for the ``plan.features`` JSON column.
+
+    Keys absent from the stored JSON default to the values defined here
+    (most restrictive).  ``extra="allow"`` ensures unknown future keys set
+    by admins are preserved without breaking parsing.
+
+    Usage::
+
+        features = PlanFeatures.from_plan(plan)
+        if features.priority_support:
+            ...
+        days = features.analytics_history_days
+    """
+
+    # Analytics
+    analytics_history_days: int = Field(
+        default=30,
+        ge=1,
+        description="How many calendar days back analytics queries may reach.",
+    )
+
+    # Support
+    priority_support: bool = Field(
+        default=False,
+        description="Whether the user's support tickets receive elevated priority.",
+    )
+
+    # API
+    api_access: bool = Field(
+        default=False,
+        description="Whether the user has programmatic API access.",
+    )
+
+    model_config = ConfigDict(extra="allow")
+
+    @classmethod
+    def from_plan(cls, plan: object | None) -> "PlanFeatures":
+        """Parse a Plan ORM object's features JSON column into a typed instance."""
+        raw: dict = getattr(plan, "features", None) or {}
+        return cls.model_validate(raw)
 
 
 class PlanCreate(BaseModel):

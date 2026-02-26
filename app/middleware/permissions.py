@@ -20,10 +20,16 @@ Available guards (in ascending order of restriction):
     RequireATE         – RequireSubscribed + plan.ate_access
 """
 
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, status
+
+if TYPE_CHECKING:
+    from app.models.schemas.billing import PlanFeatures
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,6 +132,18 @@ class UserPermissions:
     def plan_name(self) -> str | None:
         """Human-readable name of the current plan, or None."""
         return self.plan.name if self.plan else None
+
+    @property
+    def plan_features(self) -> "PlanFeatures":
+        """Typed view of the plan's ``features`` JSON column.
+
+        Returns a :class:`~app.models.schemas.billing.PlanFeatures` instance
+        with all keys defaulting to their most-restrictive values when the user
+        has no active plan.
+        """
+        from app.models.schemas.billing import PlanFeatures
+
+        return PlanFeatures.from_plan(self.plan)
 
 
 # ── Internal base resolver ────────────────────────────────────────────────────

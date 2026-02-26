@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
@@ -13,6 +13,7 @@ from app.middleware.permissions import (
 from app.models.schemas.common import MessageResponse
 from app.models.schemas.strategy import StrategyCreate, StrategyResponse, StrategyUpdate
 from app.models.strategy import Strategy
+from app.services.plan_enforcement import PlanEnforcer
 
 router = APIRouter(prefix="/strategies", tags=["Strategies"])
 
@@ -37,24 +38,8 @@ async def create_strategy(
     perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    # Enforce plan limits if subscription exists
-    if perms.is_subscribed and perms.max_strategies > 0:
-        count_result = await db.execute(
-            select(func.count(Strategy.id)).where(Strategy.user_id == perms.id)
-        )
-        current_count = count_result.scalar() or 0
-        if current_count >= perms.max_strategies:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Maximum strategies ({perms.max_strategies}) reached for your plan.",
-            )
-
-    if perms.is_subscribed and perms.max_allocation > 0:
-        if data.capital_allocation > perms.max_allocation:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Capital allocation exceeds plan limit of {perms.max_allocation}.",
-            )
+    await PlanEnforcer.strategy_count(db, perms)
+    await PlanEnforcer.allocation(db, perms, data.capital_allocation)
 
     strategy = Strategy(
         user_id=perms.id,
@@ -112,6 +97,16 @@ async def update_strategy(
     strategy = result.scalar_one_or_none()
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
+
+    # If capital_allocation is being changed, re-validate against plan limits,
+    # excluding this strategy's current value from the cumulative sum.
+    if data.capital_allocation is not None:
+        await PlanEnforcer.allocation(
+            db,
+            perms,
+            data.capital_allocation,
+            exclude_strategy_id=strategy_id,
+        )
 
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
