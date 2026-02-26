@@ -77,6 +77,7 @@ async def create_strategy(
     )
     db.add(strategy)
     await db.flush()
+    await db.refresh(strategy)
     return StrategyResponse.model_validate(strategy)
 
 
@@ -169,6 +170,7 @@ async def activate_strategy(
 
     strategy.is_active = True
     await db.flush()
+    await db.refresh(strategy)
     return StrategyResponse.model_validate(strategy)
 
 
@@ -190,4 +192,5 @@ async def pause_strategy(
 
     strategy.is_active = False
     await db.flush()
+    await db.refresh(strategy)
     return StrategyResponse.model_validate(strategy)
