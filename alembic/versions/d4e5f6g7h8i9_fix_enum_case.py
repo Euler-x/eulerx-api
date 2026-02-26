@@ -26,9 +26,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # strategy_type_enum
-    op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'CONSERVATIVE' TO 'conservative'")
+    op.execute(
+        "ALTER TYPE strategy_type_enum RENAME VALUE 'CONSERVATIVE' TO 'conservative'"
+    )
     op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'MODERATE' TO 'moderate'")
-    op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'AGGRESSIVE' TO 'aggressive'")
+    op.execute(
+        "ALTER TYPE strategy_type_enum RENAME VALUE 'AGGRESSIVE' TO 'aggressive'"
+    )
     op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'CUSTOM' TO 'custom'")
 
     # risk_profile_enum
@@ -51,19 +55,33 @@ def upgrade() -> None:
     op.execute("ALTER TYPE plan_status_enum RENAME VALUE 'ARCHIVED' TO 'archived'")
 
     # subscription_status_enum
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'INACTIVE' TO 'inactive'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'PENDING_PAYMENT' TO 'pending_payment'")
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'INACTIVE' TO 'inactive'"
+    )
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'PENDING_PAYMENT' TO 'pending_payment'"
+    )
     op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'ACTIVE' TO 'active'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'EXPIRING_SOON' TO 'expiring_soon'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'EXPIRED' TO 'expired'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'CANCELLED' TO 'cancelled'")
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'EXPIRING_SOON' TO 'expiring_soon'"
+    )
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'EXPIRED' TO 'expired'"
+    )
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'CANCELLED' TO 'cancelled'"
+    )
 
     # payment_status_enum
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'WAITING' TO 'waiting'")
-    op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'CONFIRMING' TO 'confirming'")
+    op.execute(
+        "ALTER TYPE payment_status_enum RENAME VALUE 'CONFIRMING' TO 'confirming'"
+    )
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'CONFIRMED' TO 'confirmed'")
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'SENDING' TO 'sending'")
-    op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'PARTIALLY_PAID' TO 'partially_paid'")
+    op.execute(
+        "ALTER TYPE payment_status_enum RENAME VALUE 'PARTIALLY_PAID' TO 'partially_paid'"
+    )
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'FINISHED' TO 'finished'")
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'FAILED' TO 'failed'")
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'REFUNDED' TO 'refunded'")
@@ -88,25 +106,39 @@ def upgrade() -> None:
     # execution_status_enum
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'PENDING' TO 'pending'")
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'FILLED' TO 'filled'")
-    op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'PARTIALLY_FILLED' TO 'partially_filled'")
+    op.execute(
+        "ALTER TYPE execution_status_enum RENAME VALUE 'PARTIALLY_FILLED' TO 'partially_filled'"
+    )
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'CLOSED' TO 'closed'")
-    op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'CANCELLED' TO 'cancelled'")
+    op.execute(
+        "ALTER TYPE execution_status_enum RENAME VALUE 'CANCELLED' TO 'cancelled'"
+    )
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'FAILED' TO 'failed'")
 
     # transaction_category_enum
-    op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'DEPOSIT' TO 'deposit'")
-    op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'EXECUTION' TO 'execution'")
-    op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'SUBSCRIPTION' TO 'subscription'")
+    op.execute(
+        "ALTER TYPE transaction_category_enum RENAME VALUE 'DEPOSIT' TO 'deposit'"
+    )
+    op.execute(
+        "ALTER TYPE transaction_category_enum RENAME VALUE 'EXECUTION' TO 'execution'"
+    )
+    op.execute(
+        "ALTER TYPE transaction_category_enum RENAME VALUE 'SUBSCRIPTION' TO 'subscription'"
+    )
     op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'REWARD' TO 'reward'")
 
     # transaction_status_enum
     op.execute("ALTER TYPE transaction_status_enum RENAME VALUE 'PENDING' TO 'pending'")
-    op.execute("ALTER TYPE transaction_status_enum RENAME VALUE 'CONFIRMED' TO 'confirmed'")
+    op.execute(
+        "ALTER TYPE transaction_status_enum RENAME VALUE 'CONFIRMED' TO 'confirmed'"
+    )
     op.execute("ALTER TYPE transaction_status_enum RENAME VALUE 'FAILED' TO 'failed'")
 
     # ticket_status_enum
     op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'OPEN' TO 'open'")
-    op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'IN_PROGRESS' TO 'in_progress'")
+    op.execute(
+        "ALTER TYPE ticket_status_enum RENAME VALUE 'IN_PROGRESS' TO 'in_progress'"
+    )
     op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'RESOLVED' TO 'resolved'")
     op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'CLOSED' TO 'closed'")
 
@@ -124,11 +156,21 @@ def upgrade() -> None:
     op.execute("ALTER TYPE ambassador_rank_enum RENAME VALUE 'DIAMOND' TO 'diamond'")
 
     # content_category_enum
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'CRYPTO_BASICS' TO 'crypto_basics'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'AI_TRADING' TO 'ai_trading'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'RISK_MANAGEMENT' TO 'risk_management'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'AUTOMATED_TRADING' TO 'automated_trading'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'PLATFORM_GUIDE' TO 'platform_guide'")
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'CRYPTO_BASICS' TO 'crypto_basics'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'AI_TRADING' TO 'ai_trading'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'RISK_MANAGEMENT' TO 'risk_management'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'AUTOMATED_TRADING' TO 'automated_trading'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'PLATFORM_GUIDE' TO 'platform_guide'"
+    )
 
     # content_type_enum
     op.execute("ALTER TYPE content_type_enum RENAME VALUE 'VIDEO' TO 'video'")
@@ -138,9 +180,13 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # strategy_type_enum
-    op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'conservative' TO 'CONSERVATIVE'")
+    op.execute(
+        "ALTER TYPE strategy_type_enum RENAME VALUE 'conservative' TO 'CONSERVATIVE'"
+    )
     op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'moderate' TO 'MODERATE'")
-    op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'aggressive' TO 'AGGRESSIVE'")
+    op.execute(
+        "ALTER TYPE strategy_type_enum RENAME VALUE 'aggressive' TO 'AGGRESSIVE'"
+    )
     op.execute("ALTER TYPE strategy_type_enum RENAME VALUE 'custom' TO 'CUSTOM'")
 
     # risk_profile_enum
@@ -163,19 +209,33 @@ def downgrade() -> None:
     op.execute("ALTER TYPE plan_status_enum RENAME VALUE 'archived' TO 'ARCHIVED'")
 
     # subscription_status_enum
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'inactive' TO 'INACTIVE'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'pending_payment' TO 'PENDING_PAYMENT'")
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'inactive' TO 'INACTIVE'"
+    )
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'pending_payment' TO 'PENDING_PAYMENT'"
+    )
     op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'active' TO 'ACTIVE'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'expiring_soon' TO 'EXPIRING_SOON'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'expired' TO 'EXPIRED'")
-    op.execute("ALTER TYPE subscription_status_enum RENAME VALUE 'cancelled' TO 'CANCELLED'")
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'expiring_soon' TO 'EXPIRING_SOON'"
+    )
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'expired' TO 'EXPIRED'"
+    )
+    op.execute(
+        "ALTER TYPE subscription_status_enum RENAME VALUE 'cancelled' TO 'CANCELLED'"
+    )
 
     # payment_status_enum
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'waiting' TO 'WAITING'")
-    op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'confirming' TO 'CONFIRMING'")
+    op.execute(
+        "ALTER TYPE payment_status_enum RENAME VALUE 'confirming' TO 'CONFIRMING'"
+    )
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'confirmed' TO 'CONFIRMED'")
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'sending' TO 'SENDING'")
-    op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'partially_paid' TO 'PARTIALLY_PAID'")
+    op.execute(
+        "ALTER TYPE payment_status_enum RENAME VALUE 'partially_paid' TO 'PARTIALLY_PAID'"
+    )
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'finished' TO 'FINISHED'")
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'failed' TO 'FAILED'")
     op.execute("ALTER TYPE payment_status_enum RENAME VALUE 'refunded' TO 'REFUNDED'")
@@ -200,25 +260,39 @@ def downgrade() -> None:
     # execution_status_enum
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'pending' TO 'PENDING'")
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'filled' TO 'FILLED'")
-    op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'partially_filled' TO 'PARTIALLY_FILLED'")
+    op.execute(
+        "ALTER TYPE execution_status_enum RENAME VALUE 'partially_filled' TO 'PARTIALLY_FILLED'"
+    )
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'closed' TO 'CLOSED'")
-    op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'cancelled' TO 'CANCELLED'")
+    op.execute(
+        "ALTER TYPE execution_status_enum RENAME VALUE 'cancelled' TO 'CANCELLED'"
+    )
     op.execute("ALTER TYPE execution_status_enum RENAME VALUE 'failed' TO 'FAILED'")
 
     # transaction_category_enum
-    op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'deposit' TO 'DEPOSIT'")
-    op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'execution' TO 'EXECUTION'")
-    op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'subscription' TO 'SUBSCRIPTION'")
+    op.execute(
+        "ALTER TYPE transaction_category_enum RENAME VALUE 'deposit' TO 'DEPOSIT'"
+    )
+    op.execute(
+        "ALTER TYPE transaction_category_enum RENAME VALUE 'execution' TO 'EXECUTION'"
+    )
+    op.execute(
+        "ALTER TYPE transaction_category_enum RENAME VALUE 'subscription' TO 'SUBSCRIPTION'"
+    )
     op.execute("ALTER TYPE transaction_category_enum RENAME VALUE 'reward' TO 'REWARD'")
 
     # transaction_status_enum
     op.execute("ALTER TYPE transaction_status_enum RENAME VALUE 'pending' TO 'PENDING'")
-    op.execute("ALTER TYPE transaction_status_enum RENAME VALUE 'confirmed' TO 'CONFIRMED'")
+    op.execute(
+        "ALTER TYPE transaction_status_enum RENAME VALUE 'confirmed' TO 'CONFIRMED'"
+    )
     op.execute("ALTER TYPE transaction_status_enum RENAME VALUE 'failed' TO 'FAILED'")
 
     # ticket_status_enum
     op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'open' TO 'OPEN'")
-    op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'in_progress' TO 'IN_PROGRESS'")
+    op.execute(
+        "ALTER TYPE ticket_status_enum RENAME VALUE 'in_progress' TO 'IN_PROGRESS'"
+    )
     op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'resolved' TO 'RESOLVED'")
     op.execute("ALTER TYPE ticket_status_enum RENAME VALUE 'closed' TO 'CLOSED'")
 
@@ -236,11 +310,21 @@ def downgrade() -> None:
     op.execute("ALTER TYPE ambassador_rank_enum RENAME VALUE 'diamond' TO 'DIAMOND'")
 
     # content_category_enum
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'crypto_basics' TO 'CRYPTO_BASICS'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'ai_trading' TO 'AI_TRADING'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'risk_management' TO 'RISK_MANAGEMENT'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'automated_trading' TO 'AUTOMATED_TRADING'")
-    op.execute("ALTER TYPE content_category_enum RENAME VALUE 'platform_guide' TO 'PLATFORM_GUIDE'")
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'crypto_basics' TO 'CRYPTO_BASICS'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'ai_trading' TO 'AI_TRADING'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'risk_management' TO 'RISK_MANAGEMENT'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'automated_trading' TO 'AUTOMATED_TRADING'"
+    )
+    op.execute(
+        "ALTER TYPE content_category_enum RENAME VALUE 'platform_guide' TO 'PLATFORM_GUIDE'"
+    )
 
     # content_type_enum
     op.execute("ALTER TYPE content_type_enum RENAME VALUE 'video' TO 'VIDEO'")
