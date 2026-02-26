@@ -29,10 +29,10 @@ class Strategy(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     strategy_type: Mapped[StrategyType] = mapped_column(
-        SAEnum(StrategyType, name="strategy_type_enum"), nullable=False
+        SAEnum(StrategyType, name="strategy_type_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
     )
     risk_profile: Mapped[RiskProfile] = mapped_column(
-        SAEnum(RiskProfile, name="risk_profile_enum"), nullable=False
+        SAEnum(RiskProfile, name="risk_profile_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
     )
     leverage_limit: Mapped[float] = mapped_column(Float, default=1.0)
     max_positions: Mapped[int] = mapped_column(Integer, default=5)
@@ -55,7 +55,7 @@ class Strategy(Base, TimestampMixin):
         Float, nullable=True, default=None
     )
     timeframe: Mapped[Optional[StrategyTimeframe]] = mapped_column(
-        SAEnum(StrategyTimeframe, name="strategy_timeframe_enum"),
+        SAEnum(StrategyTimeframe, name="strategy_timeframe_enum", values_callable=lambda obj: [e.value for e in obj]),
         nullable=True,
         default=None,
     )

@@ -18,11 +18,11 @@ class LearningContent(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     category: Mapped[ContentCategory] = mapped_column(
-        SAEnum(ContentCategory, name="content_category_enum"), nullable=False
+        SAEnum(ContentCategory, name="content_category_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
     )
     file_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     content_type: Mapped[ContentType] = mapped_column(
-        SAEnum(ContentType, name="content_type_enum"), nullable=False
+        SAEnum(ContentType, name="content_type_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
     )
     content_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0)

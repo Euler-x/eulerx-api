@@ -28,11 +28,11 @@ class SupportTicket(Base, TimestampMixin):
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[TicketStatus] = mapped_column(
-        SAEnum(TicketStatus, name="ticket_status_enum"),
+        SAEnum(TicketStatus, name="ticket_status_enum", values_callable=lambda obj: [e.value for e in obj]),
         default=TicketStatus.OPEN,
     )
     priority: Mapped[TicketPriority] = mapped_column(
-        SAEnum(TicketPriority, name="ticket_priority_enum"),
+        SAEnum(TicketPriority, name="ticket_priority_enum", values_callable=lambda obj: [e.value for e in obj]),
         default=TicketPriority.MEDIUM,
     )
 

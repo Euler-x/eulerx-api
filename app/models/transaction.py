@@ -25,7 +25,7 @@ class Transaction(Base, TimestampMixin):
         index=True,
     )
     category: Mapped[TransactionCategory] = mapped_column(
-        SAEnum(TransactionCategory, name="transaction_category_enum"), nullable=False
+        SAEnum(TransactionCategory, name="transaction_category_enum", values_callable=lambda obj: [e.value for e in obj]), nullable=False
     )
     amount: Mapped[float] = mapped_column(
         Numeric(precision=18, scale=8), nullable=False
@@ -33,7 +33,7 @@ class Transaction(Base, TimestampMixin):
     asset: Mapped[str] = mapped_column(String(20), nullable=False)
     wallet_address_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[TransactionStatus] = mapped_column(
-        SAEnum(TransactionStatus, name="transaction_status_enum"),
+        SAEnum(TransactionStatus, name="transaction_status_enum", values_callable=lambda obj: [e.value for e in obj]),
         default=TransactionStatus.PENDING,
     )
     verification_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

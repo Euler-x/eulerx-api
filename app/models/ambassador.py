@@ -25,7 +25,7 @@ class Ambassador(Base, TimestampMixin):
         unique=True,
     )
     rank: Mapped[AmbassadorRank] = mapped_column(
-        SAEnum(AmbassadorRank, name="ambassador_rank_enum"),
+        SAEnum(AmbassadorRank, name="ambassador_rank_enum", values_callable=lambda obj: [e.value for e in obj]),
         default=AmbassadorRank.BRONZE,
     )
     referral_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
