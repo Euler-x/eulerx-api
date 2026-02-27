@@ -126,7 +126,7 @@ class PlanEnforcer:
             )
             query = query.where(Strategy.id != excl)
 
-        current_total: float = (await db.execute(query)).scalar() or 0.0
+        current_total: float = float((await db.execute(query)).scalar() or 0.0)
         proposed_total = current_total + new_allocation
 
         if proposed_total > cap:

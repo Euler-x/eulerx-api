@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, status
@@ -223,9 +224,19 @@ async def _load_user_permissions(
     sub_active = False
     if subscription:
         now = utc_now()
-        if subscription.expires_at is None or subscription.expires_at >= now:
+
+        def _utc(dt: datetime | None) -> datetime | None:
+            """Ensure *dt* is timezone-aware (handles SQLite returning naive datetimes)."""
+            if dt is None:
+                return None
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+        expires_at = _utc(subscription.expires_at)
+        grace_until = _utc(subscription.grace_until)
+
+        if expires_at is None or expires_at >= now:
             sub_active = True
-        elif subscription.grace_until and subscription.grace_until >= now:
+        elif grace_until and grace_until >= now:
             sub_active = True
         else:
             # Subscription has expired past the grace period — update status
