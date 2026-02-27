@@ -13,9 +13,12 @@ from app.models.schemas.auth import (
     EmailSubmitRequest,
     EmailVerificationResponse,
     EmailVerifyRequest,
+    ForgotPasswordRequest,
     LoginRequest,
+    PasswordResetResponse,
     RefreshTokenRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     UserResponse,
     WalletConnectRequest,
     WalletGenerateRequest,
@@ -385,4 +388,78 @@ async def verify_email(
     return EmailVerificationResponse(
         message="Email verified successfully!",
         email_verified=True,
+    )
+
+
+# ── Password Reset ────────────────────────────────────────────────
+
+
+@router.post("/forgot-password", response_model=PasswordResetResponse)
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Request a password reset email.
+
+    Always returns the same message to prevent email enumeration.
+    Only email/password accounts can reset their password.
+    """
+    _GENERIC = "If that email is registered, you'll receive a reset link shortly."
+
+    result = await db.execute(select(User).where(User.email == request.email))
+    user = result.scalar_one_or_none()
+
+    # Silently skip: unknown email or wallet-only users (no password to reset)
+    if user is None or not user.password_hash:
+        return PasswordResetResponse(message=_GENERIC)
+
+    notification_service = NotificationService()
+    await notification_service.send_password_reset_email(db, user)
+
+    return PasswordResetResponse(message=_GENERIC)
+
+
+@router.post("/reset-password", response_model=PasswordResetResponse)
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Complete a password reset using the token from the reset email."""
+    result = await db.execute(
+        select(User).where(User.password_reset_token == request.token)
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    # Normalise timezone (SQLite returns naive datetimes; PostgreSQL returns aware)
+    expires_at = user.password_reset_expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        from datetime import timezone as _tz
+
+        expires_at = expires_at.replace(tzinfo=_tz.utc)
+
+    if expires_at is None or expires_at < utc_now():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset link has expired. Please request a new one.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated. Please contact support.",
+        )
+
+    user.password_hash = hash_password(request.new_password)
+    user.password_reset_token = None
+    user.password_reset_expires_at = None
+    await db.flush()
+
+    return PasswordResetResponse(
+        message="Password reset successfully. You can now log in."
     )

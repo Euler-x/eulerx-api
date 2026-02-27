@@ -60,6 +60,14 @@ class User(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Password reset
+    password_reset_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    password_reset_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Telegram notifications
     telegram_bot_token: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True

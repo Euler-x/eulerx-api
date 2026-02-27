@@ -266,6 +266,27 @@ class NotificationService:
         )
         return code
 
+    async def send_password_reset_email(self, db: AsyncSession, user: User) -> None:
+        """Generate reset token, save to user, and send password reset email.
+
+        Email-only — not sent via Telegram.
+        Always sent (no preference check, no rate limiting).
+        Token expires in 30 minutes.
+        """
+        token = secrets.token_urlsafe(32)
+        user.password_reset_token = token
+        user.password_reset_expires_at = utc_now() + timedelta(minutes=30)
+        await db.flush()
+
+        reset_link = f"{settings.frontend_url}/reset-password?token={token}"
+        subject, html = email_templates.password_reset(reset_link)
+        await self.send_email(
+            to_email=user.email,
+            to_name=user.email,
+            subject=subject,
+            html_body=html,
+        )
+
     async def send_welcome_email(self, user: User) -> None:
         """Always sent (no preference check, no rate limiting)."""
         # Email
