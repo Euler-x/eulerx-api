@@ -49,6 +49,7 @@ class UserResponse(BaseModel):
     wallet_type: Optional[WalletType] = None
     is_admin: bool
     is_active: bool = True
+    is_subscribed: bool = False
     email: Optional[str] = None
     email_verified: bool = False
     has_wallet: bool = False

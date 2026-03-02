@@ -103,3 +103,50 @@ async def get_optional_user(
         return result.scalar_one_or_none()
     except ValueError:
         return None
+
+
+async def get_optional_user_strict(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Like get_optional_user but raises 401 if a token was provided and is invalid.
+
+    Use this when an endpoint supports both authenticated and unauthenticated
+    callers, but must never silently downgrade an expired token to "anonymous".
+    """
+    if credentials is None:
+        return None
+
+    # Token was provided — it MUST be valid
+    try:
+        payload = verify_token(credentials.credentials, expected_type="access")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID in token",
+        ) from e
+
+    result = await db.execute(select(User).where(User.id == user_uuid))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+    return user

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.middleware.auth import get_current_user, get_optional_user
+from app.middleware.auth import get_current_user, get_optional_user_strict
 from app.models.ambassador import Ambassador
 from app.models.enums import WalletType
 from app.models.schemas.auth import (
@@ -139,7 +139,7 @@ async def login(
 async def connect_wallet(
     request: WalletConnectRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_optional_user),
+    current_user: User | None = Depends(get_optional_user_strict),
 ):
     """Connect a Hyperliquid wallet using an Agent/API wallet private key.
 
