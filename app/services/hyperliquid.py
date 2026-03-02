@@ -204,6 +204,35 @@ class HyperliquidService:
             reduce_only=True,
         )
 
+    async def get_spot_state(self, wallet_address: str) -> dict:
+        """Fetch the spot clearinghouse state (USDC, USDE, etc.)."""
+        data = await self._post(
+            "/info",
+            {
+                "type": "spotClearinghouseState",
+                "user": wallet_address,
+            },
+        )
+        return data
+
+    async def get_spot_balances(self, wallet_address: str) -> list[dict]:
+        """Return non-zero spot balances as [{coin, total, hold}]."""
+        try:
+            state = await self.get_spot_state(wallet_address)
+            balances = state.get("balances", [])
+            return [
+                {
+                    "coin": b.get("coin", ""),
+                    "total": float(b.get("total", 0)),
+                    "hold": float(b.get("hold", 0)),
+                }
+                for b in balances
+                if float(b.get("total", 0)) > 0
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get spot balances: {e}")
+            return []
+
     async def get_account_value(self, wallet_address: str) -> float:
         try:
             state = await self.get_user_state(wallet_address)

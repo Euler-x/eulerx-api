@@ -18,27 +18,37 @@ class TransparencyService:
         wallet_address: str,
         strategies: list[Strategy],
     ) -> dict:
+        user_state: dict = {}
+        spot_balances: list[dict] = []
+
         try:
             user_state = await self.hyperliquid.get_user_state(wallet_address)
         except Exception as e:
-            logger.error("Failed to fetch user state for reserves: %s", e)
-            return {
-                "on_chain_balance": 0.0,
-                "total_allocated": 0.0,
-                "margin_used": 0.0,
-                "free_collateral": 0.0,
-                "surplus_deficit": 0.0,
-                "verification_timestamp": utc_now().isoformat(),
-            }
+            logger.error("Failed to fetch perps state for reserves: %s", e)
+
+        try:
+            spot_balances = await self.hyperliquid.get_spot_balances(wallet_address)
+        except Exception as e:
+            logger.error("Failed to fetch spot balances for reserves: %s", e)
 
         margin_summary = user_state.get("marginSummary", {})
-        on_chain_balance = float(margin_summary.get("accountValue", 0))
+        perps_balance = float(margin_summary.get("accountValue", 0))
         margin_used = float(margin_summary.get("totalMarginUsed", 0))
         free_collateral = float(margin_summary.get("totalRawUsd", 0))
+
+        # Sum all spot balances (USDC, USDE, etc.)
+        spot_balance = sum(b["total"] for b in spot_balances)
+
+        # Total on-chain balance = perps + spot
+        on_chain_balance = perps_balance + spot_balance
+
         total_allocated = sum(float(s.capital_allocation) for s in strategies)
 
         return {
             "on_chain_balance": round(on_chain_balance, 2),
+            "perps_balance": round(perps_balance, 2),
+            "spot_balance": round(spot_balance, 2),
+            "spot_balances": spot_balances,
             "total_allocated": round(total_allocated, 2),
             "margin_used": round(margin_used, 2),
             "free_collateral": round(free_collateral, 2),

@@ -3,8 +3,17 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class SpotBalance(BaseModel):
+    coin: str
+    total: float
+    hold: float = 0.0
+
+
 class ProofOfReservesResponse(BaseModel):
     on_chain_balance: float = 0.0
+    perps_balance: float = 0.0
+    spot_balance: float = 0.0
+    spot_balances: list[SpotBalance] = []
     total_allocated: float = 0.0
     margin_used: float = 0.0
     free_collateral: float = 0.0
