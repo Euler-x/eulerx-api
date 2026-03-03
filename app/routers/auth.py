@@ -164,19 +164,11 @@ async def connect_wallet(
     existing_wallet_user = result.scalar_one_or_none()
 
     if current_user is not None:
-        # Authenticated user linking a wallet from dashboard
+        # Authenticated user linking or updating a wallet from dashboard
         if existing_wallet_user and existing_wallet_user.id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This wallet is already linked to another account.",
-            )
-        if (
-            current_user.wallet_address_hash
-            and current_user.wallet_address_hash != address_hash
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A wallet is already connected to your account.",
             )
         current_user.wallet_address = request.wallet_address
         current_user.wallet_address_hash = address_hash
