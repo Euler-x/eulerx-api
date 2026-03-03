@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -48,6 +49,26 @@ class HyperliquidService:
                 )
         return symbols
 
+    async def get_candles(
+        self, coin: str, interval: str = "1h", hours: int = 24
+    ) -> list[dict]:
+        """Fetch OHLCV candle data for a coin."""
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - (hours * 3600 * 1000)
+        data = await self._post(
+            "/info",
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": coin,
+                    "interval": interval,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                },
+            },
+        )
+        return data
+
     async def get_top_gainers(self, limit: int = 20) -> list[dict]:
         try:
             market_data = await self.get_market_data()
@@ -55,6 +76,74 @@ class HyperliquidService:
         except Exception as e:
             logger.error(f"Failed to fetch top gainers: {e}")
             return []
+
+    async def enrich_with_candles(self, symbols: list[dict]) -> list[dict]:
+        """Add 24h candle summary to each symbol's market data."""
+        for sym in symbols:
+            coin = sym.get("symbol", "")
+            if not coin:
+                continue
+            try:
+                candles = await self.get_candles(coin, interval="1h", hours=24)
+                if not candles:
+                    continue
+
+                closes = [float(c["c"]) for c in candles]
+                opens = [float(c["o"]) for c in candles]
+                highs = [float(c["h"]) for c in candles]
+                lows = [float(c["l"]) for c in candles]
+                volumes = [float(c["v"]) for c in candles]
+
+                high_24h = max(highs)
+                low_24h = min(lows)
+                open_24h = opens[0]
+                close_latest = closes[-1]
+                price_change_24h = ((close_latest - open_24h) / open_24h) * 100
+                total_volume = sum(volumes)
+                avg_volume = total_volume / len(volumes) if volumes else 0
+
+                # Simple volatility: (high - low) / mid as percentage
+                volatility = ((high_24h - low_24h) / close_latest) * 100
+
+                # Recent trend: last 6 candles
+                recent_closes = closes[-6:]
+                trend_up = sum(
+                    1
+                    for i in range(1, len(recent_closes))
+                    if recent_closes[i] > recent_closes[i - 1]
+                )
+                trend_direction = (
+                    "up" if trend_up >= 4 else "down" if trend_up <= 1 else "mixed"
+                )
+
+                # Rough RSI approximation (14-period if available)
+                rsi_period = min(14, len(closes) - 1)
+                gains, losses = [], []
+                for i in range(len(closes) - rsi_period, len(closes)):
+                    diff = closes[i] - closes[i - 1]
+                    gains.append(max(diff, 0))
+                    losses.append(max(-diff, 0))
+                avg_gain = sum(gains) / len(gains) if gains else 0
+                avg_loss = sum(losses) / len(losses) if losses else 1
+                rs = avg_gain / avg_loss if avg_loss > 0 else 100
+                rsi = 100 - (100 / (1 + rs))
+
+                sym["candle_summary"] = {
+                    "high_24h": round(high_24h, 4),
+                    "low_24h": round(low_24h, 4),
+                    "open_24h": round(open_24h, 4),
+                    "price_change_24h_pct": round(price_change_24h, 2),
+                    "total_volume_24h": round(total_volume, 2),
+                    "avg_hourly_volume": round(avg_volume, 2),
+                    "volatility_pct": round(volatility, 2),
+                    "recent_trend": trend_direction,
+                    "rsi_14": round(rsi, 1),
+                    "num_candles": len(candles),
+                }
+            except Exception as e:
+                logger.warning(f"Failed to fetch candles for {coin}: {e}")
+
+        return symbols
 
     async def get_user_state(self, wallet_address: str) -> dict:
         data = await self._post(

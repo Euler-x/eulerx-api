@@ -15,11 +15,15 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-ANALYSIS_PROMPT_TEMPLATE = """You are a professional cryptocurrency market analyst. Analyze the following market data and provide a trading signal.
+ANALYSIS_PROMPT_TEMPLATE = """You are a professional cryptocurrency perpetual futures analyst on HyperLiquid. Analyze the following market data and provide a trading signal.
 
 Symbol: {symbol}
-Current Price: {price}
-Market Context: {context}
+Current Price: ${price}
+
+24h Market Data:
+{candle_summary}
+
+Full Context: {context}
 
 Respond ONLY with valid JSON in this exact format (no markdown, no explanation):
 {{
@@ -40,11 +44,13 @@ Respond ONLY with valid JSON in this exact format (no markdown, no explanation):
 }}
 
 Rules:
+- Use the 24h candle data (price change, RSI, volume, trend) to make informed decisions
 - Stop loss should be 1-3% from entry for conservative trades
 - Take profit should target 1.5-5% from entry
-- Only signal BUY or SELL if confidence > 0.5
-- Signal HOLD if uncertain
-- Focus on capital preservation
+- Signal BUY if trend is bullish with strong momentum and RSI is not overbought (< 70)
+- Signal SELL if trend is bearish with strong momentum and RSI is not oversold (> 30)
+- Signal HOLD only if there is genuinely no clear directional bias
+- Be decisive — if data shows a clear trend, commit to a signal with appropriate confidence
 """
 
 
@@ -61,9 +67,25 @@ class AIEngineService:
             logger.warning("OpenRouter API key not configured")
             return None
 
+        candle = market_data.get("candle_summary", {})
+        if candle:
+            candle_lines = (
+                f"- 24h Change: {candle.get('price_change_24h_pct', 'N/A')}%\n"
+                f"- 24h High: ${candle.get('high_24h', 'N/A')}\n"
+                f"- 24h Low: ${candle.get('low_24h', 'N/A')}\n"
+                f"- 24h Volume: {candle.get('total_volume_24h', 'N/A')}\n"
+                f"- Avg Hourly Volume: {candle.get('avg_hourly_volume', 'N/A')}\n"
+                f"- Volatility: {candle.get('volatility_pct', 'N/A')}%\n"
+                f"- Recent Trend (6h): {candle.get('recent_trend', 'N/A')}\n"
+                f"- RSI (14): {candle.get('rsi_14', 'N/A')}"
+            )
+        else:
+            candle_lines = "No candle data available"
+
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
             symbol=symbol,
             price=market_data.get("mid_price", "N/A"),
+            candle_summary=candle_lines,
             context=json.dumps(market_data, default=str),
         )
 

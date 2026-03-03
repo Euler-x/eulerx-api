@@ -47,10 +47,12 @@ settings = get_settings()
 
 
 async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid."""
+    """Fetch market data from Hyperliquid with 24h candle enrichment."""
     service = HyperliquidService()
     symbols = await service.get_top_gainers(limit=settings.analysis_top_symbols_limit)
     logger.info("Fetched %d symbols from Hyperliquid", len(symbols))
+    symbols = await service.enrich_with_candles(symbols)
+    logger.info("Enriched symbols with 24h candle data")
     return symbols
 
 
