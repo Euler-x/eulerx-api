@@ -26,6 +26,7 @@ from datetime import timedelta
 
 from app.config import get_settings
 from app.db.base import async_session_factory
+import app.models.database  # noqa: F401  — register all models before any queries
 from app.models.billing import Subscription
 from app.models.admin_config import AdminConfig
 from app.models.enums import SignalStatus, SubscriptionStatus
