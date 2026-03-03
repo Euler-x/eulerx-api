@@ -27,6 +27,7 @@ from app.routers import (
     telegram,
     transactions,
     transparency,
+    wallet,
     worker_health,
 )
 from app.utils.rate_limiter import rate_limit_dependency
@@ -235,6 +236,7 @@ app.include_router(market.router, prefix=prefix)
 app.include_router(transactions.router, prefix=prefix)
 app.include_router(analytics.router, prefix=prefix)
 app.include_router(transparency.router, prefix=prefix)
+app.include_router(wallet.router, prefix=prefix)
 app.include_router(billing.router, prefix=prefix)
 app.include_router(ambassador.router, prefix=prefix)
 app.include_router(admin.router, prefix=prefix)

@@ -73,3 +73,4 @@ from app.models.schemas.admin import (  # noqa: F401
     AdminConfigResponse,
     AdminConfigUpdate,
 )
+from app.models.schemas.wallet import WalletBalanceResponse  # noqa: F401
