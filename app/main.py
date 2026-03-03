@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.admin import setup_admin
 from app.config import get_settings
 from app.db.init_db import check_db_connection, dispose_engine
 from app.routers import (
@@ -128,6 +129,12 @@ app = FastAPI(
     redoc_url="/redoc" if settings.debug else None,
     openapi_url="/openapi.json" if settings.debug else None,
 )
+
+# ---------------------------------------------------------------------------
+# SQLAdmin dashboard at /admin
+# ---------------------------------------------------------------------------
+
+setup_admin(app)
 
 # ---------------------------------------------------------------------------
 # Middleware (order matters — added last runs outermost)
