@@ -79,8 +79,8 @@ async def subscribe_to_plan(
             sub.status = SubscriptionStatus.CANCELLED
 
     # ── Trial path ─────────────────────────────────────────────────────────
-    # When the plan offers a free trial, activate it directly (no payment).
-    if plan.trial_days > 0:
+    # Only use trial when explicitly requested AND plan offers one.
+    if request.use_trial and plan.trial_days > 0:
         await PlanEnforcer.trial_eligibility(db, perms.id)
 
         now = utc_now()

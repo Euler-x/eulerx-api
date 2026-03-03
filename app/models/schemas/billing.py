@@ -98,6 +98,7 @@ class PlanResponse(BaseModel):
 class SubscribeRequest(BaseModel):
     plan_id: uuid.UUID
     pay_currency: Optional[str] = None
+    use_trial: bool = False
 
 
 class SubscriptionResponse(BaseModel):
