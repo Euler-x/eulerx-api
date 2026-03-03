@@ -390,7 +390,7 @@ async def test_trial_plan_activates_subscription_immediately(client, setup_db):
     r = await client.post(
         "/api/v1/billing/subscribe",
         headers=hdrs,
-        json={"plan_id": str(trial_plan.id)},
+        json={"plan_id": str(trial_plan.id), "use_trial": True},
     )
     assert r.status_code == 200, r.text
     data = r.json()
@@ -432,7 +432,7 @@ async def test_trial_blocked_for_prior_subscriber(client, setup_db):
     r = await client.post(
         "/api/v1/billing/subscribe",
         headers=hdrs,
-        json={"plan_id": str(trial_plan.id)},
+        json={"plan_id": str(trial_plan.id), "use_trial": True},
     )
     assert r.status_code == 403
     detail = r.json()["detail"].lower()
