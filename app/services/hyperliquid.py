@@ -245,34 +245,35 @@ class HyperliquidService:
                 reduce_only=reduce_only,
             )
 
-            # Extract tx hash and check for errors in response
+            # Check for top-level error (response is a string, not dict)
+            if order_result.get("status") == "err":
+                err_msg = order_result.get("response", "Unknown error")
+                logger.error("HyperLiquid order error: %s", err_msg)
+                return {"success": False, "error": str(err_msg)}
+
+            # Extract tx hash from successful response
             tx_hash = None
-            statuses = (
-                order_result.get("response", {}).get("data", {}).get("statuses", [])
-            )
-            if statuses:
-                first = statuses[0]
-                # Statuses can be dicts (success) or strings (error messages)
-                if isinstance(first, dict):
-                    tx_hash = first.get("resting", {}).get("oid") or first.get(
-                        "filled", {}
-                    ).get("oid")
-                    # Check for error key in dict status
-                    if "error" in first:
-                        logger.error("HyperLiquid order error: %s", first["error"])
-                        return {
-                            "success": False,
-                            "error": first["error"],
-                            "data": order_result,
-                        }
-                elif isinstance(first, str):
-                    # String status = error message from exchange
-                    logger.error("HyperLiquid order rejected: %s", first)
-                    return {
-                        "success": False,
-                        "error": first,
-                        "data": order_result,
-                    }
+            response = order_result.get("response", {})
+            if isinstance(response, dict):
+                statuses = response.get("data", {}).get("statuses", [])
+                if statuses:
+                    first = statuses[0]
+                    if isinstance(first, dict):
+                        tx_hash = first.get("resting", {}).get("oid") or first.get(
+                            "filled", {}
+                        ).get("oid")
+                        if "error" in first:
+                            logger.error(
+                                "HyperLiquid order rejected: %s",
+                                first["error"],
+                            )
+                            return {
+                                "success": False,
+                                "error": first["error"],
+                            }
+                    elif isinstance(first, str):
+                        logger.error("HyperLiquid order rejected: %s", first)
+                        return {"success": False, "error": first}
 
             return {
                 "success": True,
