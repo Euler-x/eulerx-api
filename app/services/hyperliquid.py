@@ -245,16 +245,34 @@ class HyperliquidService:
                 reduce_only=reduce_only,
             )
 
-            # Extract tx hash from response
+            # Extract tx hash and check for errors in response
             tx_hash = None
             statuses = (
                 order_result.get("response", {}).get("data", {}).get("statuses", [])
             )
             if statuses:
                 first = statuses[0]
-                tx_hash = first.get("resting", {}).get("oid") or first.get(
-                    "filled", {}
-                ).get("oid")
+                # Statuses can be dicts (success) or strings (error messages)
+                if isinstance(first, dict):
+                    tx_hash = first.get("resting", {}).get("oid") or first.get(
+                        "filled", {}
+                    ).get("oid")
+                    # Check for error key in dict status
+                    if "error" in first:
+                        logger.error("HyperLiquid order error: %s", first["error"])
+                        return {
+                            "success": False,
+                            "error": first["error"],
+                            "data": order_result,
+                        }
+                elif isinstance(first, str):
+                    # String status = error message from exchange
+                    logger.error("HyperLiquid order rejected: %s", first)
+                    return {
+                        "success": False,
+                        "error": first,
+                        "data": order_result,
+                    }
 
             return {
                 "success": True,
