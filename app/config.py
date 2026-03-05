@@ -109,7 +109,7 @@ class Settings(BaseSettings):
 
     # ATE
     ate_max_executions_per_hour: int = 10
-    ate_confidence_threshold: float = 0.6
+    ate_confidence_threshold: float = 0.75
     ate_default_leverage: float = 1.0
     ate_max_drawdown_percent: float = 10.0
 
@@ -180,7 +180,7 @@ class Settings(BaseSettings):
         description="How often to run the analysis pipeline (hours)",
     )
     analysis_top_symbols_limit: int = Field(
-        default=20,
+        default=5,
         description="Number of top symbols to analyze per run",
     )
     analysis_max_retries: int = Field(

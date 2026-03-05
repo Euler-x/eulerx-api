@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-ANALYSIS_PROMPT_TEMPLATE = """You are a professional cryptocurrency perpetual futures analyst on HyperLiquid. Analyze the following market data and provide a trading signal.
+ANALYSIS_PROMPT_TEMPLATE = """You are an elite cryptocurrency perpetual futures trader on HyperLiquid focused on high-probability setups with strong risk-reward ratios.
 
 Symbol: {symbol}
 Current Price: ${price}
@@ -25,7 +25,7 @@ Current Price: ${price}
 
 Full Context: {context}
 
-Respond ONLY with valid JSON in this exact format (no markdown, no explanation):
+Respond ONLY with valid JSON (no markdown, no explanation):
 {{
     "signal": "BUY" or "SELL" or "HOLD",
     "confidence": 0.0 to 1.0,
@@ -43,14 +43,16 @@ Respond ONLY with valid JSON in this exact format (no markdown, no explanation):
     }}
 }}
 
-Rules:
-- Use the 24h candle data (price change, RSI, volume, trend) to make informed decisions
-- Stop loss should be 1-3% from entry for conservative trades
-- Take profit should target 1.5-5% from entry
-- Signal BUY if trend is bullish with strong momentum and RSI is not overbought (< 70)
-- Signal SELL if trend is bearish with strong momentum and RSI is not oversold (> 30)
-- Signal HOLD only if there is genuinely no clear directional bias
-- Be decisive — if data shows a clear trend, commit to a signal with appropriate confidence
+Strict Rules — only signal BUY or SELL when ALL conditions are met:
+- Risk:reward ratio must be at least 2:1 (take_profit distance >= 2x stop_loss distance)
+- Stop loss: tight, 1-2% from entry (capital preservation is paramount)
+- Take profit: target 2-5% from entry
+- RSI must support direction: BUY only if RSI < 65, SELL only if RSI > 35
+- Volume must be normal or high (avoid low-volume setups)
+- Trend and momentum must align (no counter-trend trades)
+- Only signal with confidence >= 0.7 if the setup is genuinely strong
+- Signal HOLD if any condition above is not met — preserving capital beats forcing trades
+- Prefer setups near key support/resistance levels (24h high/low)
 """
 
 
@@ -239,6 +241,12 @@ class AIEngineService:
                 continue
 
             if aggregated["confidence"] < settings.ate_confidence_threshold:
+                continue
+
+            # Require minimum 1.5:1 risk:reward ratio
+            rr = aggregated.get("risk_reward_ratio", 0)
+            if rr and rr < 1.5:
+                logger.info("Skipping %s: R:R ratio %.2f below 1.5 minimum", symbol, rr)
                 continue
 
             signal = Signal(
