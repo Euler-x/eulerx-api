@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -221,6 +222,18 @@ class AIEngineService:
             },
         }
 
+    async def _get_today_analyzed_symbols(
+        self, db: AsyncSession, strategy_id: str | None
+    ) -> set[str]:
+        """Return symbols that already have signals generated today."""
+        now = utc_now()
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        query = select(Signal.symbol).where(Signal.created_at >= start_of_day)
+        if strategy_id:
+            query = query.where(Signal.strategy_id == strategy_id)
+        result = await db.execute(query)
+        return {row[0] for row in result.all()}
+
     async def generate_signals(
         self,
         symbols: list[dict],
@@ -229,9 +242,21 @@ class AIEngineService:
     ) -> list[Signal]:
         generated_signals = []
 
+        # Skip symbols already analyzed today (avoid duplicate analysis)
+        already_analyzed = await self._get_today_analyzed_symbols(db, strategy_id)
+        if already_analyzed:
+            logger.info(
+                "Skipping %d symbols already analyzed today: %s",
+                len(already_analyzed),
+                ", ".join(sorted(already_analyzed)),
+            )
+
         for symbol_data in symbols:
             symbol = symbol_data.get("symbol", "")
             if not symbol:
+                continue
+
+            if symbol in already_analyzed:
                 continue
 
             model_responses = await self.query_all_models(symbol, symbol_data)
