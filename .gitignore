@@ -37,3 +37,4 @@ coverage.xml
 
 # SSH keys
 .ssh/
+scripts/

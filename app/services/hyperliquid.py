@@ -234,6 +234,26 @@ class HyperliquidService:
                 else:
                     price = mid_price * (1 - slippage)
 
+            # Round price to 5 significant figures (HyperLiquid requirement)
+            if price > 0:
+                from math import floor, log10
+
+                sig_figs = 5
+                magnitude = floor(log10(abs(price)))
+                price = round(price, sig_figs - 1 - magnitude)
+
+            logger.info(
+                "Submitting order to HL: %s %s size=%s price=%s "
+                "type=%s reduce_only=%s account=%s",
+                "BUY" if is_buy else "SELL",
+                symbol,
+                size,
+                price,
+                order_type,
+                reduce_only,
+                account_address or "direct",
+            )
+
             order_result = exchange.order(
                 symbol,
                 is_buy,
@@ -348,3 +368,45 @@ class HyperliquidService:
         except Exception as e:
             logger.error(f"Failed to get account value: {e}")
             return 0.0
+
+    async def validate_agent_wallet(
+        self,
+        agent_private_key: str,
+        account_address: str,
+    ) -> tuple[bool, str]:
+        """Verify that an agent wallet key can trade on behalf of account_address.
+
+        Does a lightweight check by attempting to fetch user state and verifying
+        the agent wallet address is valid. The actual approval check happens
+        on the first order attempt, but this catches common misconfigurations.
+        """
+        try:
+            from eth_account import Account
+
+            key = (
+                agent_private_key
+                if agent_private_key.startswith("0x")
+                else f"0x{agent_private_key}"
+            )
+            wallet = Account.from_key(key)
+            agent_address = wallet.address
+
+            # Check that the main account exists on HyperLiquid
+            state = await self.get_user_state(account_address)
+            if not state or not state.get("marginSummary"):
+                return False, (
+                    f"Main wallet {account_address} has no perps account on HyperLiquid. "
+                    "Please deposit funds to the perps margin first."
+                )
+
+            logger.info(
+                "Agent wallet %s validated for account %s",
+                agent_address,
+                account_address,
+            )
+            return True, "OK"
+
+        except ImportError:
+            return False, "eth_account not installed"
+        except Exception as e:
+            return False, f"Agent wallet validation failed: {e}"

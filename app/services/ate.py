@@ -61,9 +61,29 @@ class ATEService:
         self,
         strategy: Strategy,
         entry_price: float,
+        available_balance: float | None = None,
+        sz_decimals: int = 4,
     ) -> float:
+        """Calculate position size capped to actual wallet balance.
+
+        Uses the smaller of strategy.capital_allocation and the user's live
+        wallet balance so orders never exceed available margin.
+        """
         capital = float(strategy.capital_allocation)
         leverage = min(strategy.leverage_limit, settings.ate_default_leverage)
+
+        # Cap capital to actual wallet balance (with 10% safety margin for fees)
+        if available_balance is not None and available_balance > 0:
+            effective_capital = min(capital, available_balance * 0.9)
+            logger.info(
+                "Position sizing: strategy_capital=$%.2f, wallet_balance=$%.2f, "
+                "effective=$%.2f",
+                capital,
+                available_balance,
+                effective_capital,
+            )
+        else:
+            effective_capital = capital
 
         risk_multiplier = {
             "low": 0.02,
@@ -71,10 +91,83 @@ class ATEService:
             "high": 0.10,
         }.get(strategy.risk_profile.value, 0.02)
 
-        position_value = capital * risk_multiplier * leverage
+        position_value = effective_capital * risk_multiplier * leverage
         if entry_price <= 0:
             return 0.0
-        return round(position_value / entry_price, 8)
+
+        quantity = position_value / entry_price
+
+        # Round to asset's szDecimals precision
+        quantity = round(quantity, sz_decimals)
+
+        # HyperLiquid minimum notional is ~$10
+        notional = quantity * entry_price
+        if notional < 10.0:
+            quantity = round(10.5 / entry_price, sz_decimals)
+            logger.info(
+                "Notional $%.2f below $10 minimum, adjusted qty to %s",
+                notional,
+                quantity,
+            )
+
+        return quantity
+
+    async def _get_wallet_balance(self, user: User) -> float | None:
+        """Fetch the user's available perps margin from HyperLiquid.
+
+        Returns available balance or None if the wallet has no perps margin.
+        Also checks spot balances and logs a helpful message if funds are
+        only in spot.
+        """
+        if not user.wallet_address:
+            return None
+
+        try:
+            state = await self.hyperliquid.get_user_state(user.wallet_address)
+            margin_summary = state.get("marginSummary", {})
+            account_value = float(margin_summary.get("accountValue", 0))
+            total_margin_used = float(margin_summary.get("totalMarginUsed", 0))
+            available = account_value - total_margin_used
+
+            if available <= 0:
+                # Check if user has spot funds but no perps margin
+                spot_balances = await self.hyperliquid.get_spot_balances(
+                    user.wallet_address
+                )
+                spot_total = sum(b.get("total", 0) for b in spot_balances)
+                if spot_total > 0:
+                    logger.warning(
+                        "User %s has $%.2f in spot but $0 in perps margin. "
+                        "Funds need to be transferred to perps to trade.",
+                        user.id,
+                        spot_total,
+                    )
+                return None
+
+            logger.info(
+                "User %s wallet balance: account=$%.2f, margin_used=$%.2f, "
+                "available=$%.2f",
+                user.id,
+                account_value,
+                total_margin_used,
+                available,
+            )
+            return available
+
+        except Exception as e:
+            logger.error("Failed to fetch wallet balance for user %s: %s", user.id, e)
+            return None
+
+    async def _get_sz_decimals(self, symbol: str) -> int:
+        """Get the size decimals for a symbol from HyperLiquid meta."""
+        try:
+            meta = await self.hyperliquid.get_meta()
+            for asset in meta.get("universe", []):
+                if asset.get("name") == symbol:
+                    return asset.get("szDecimals", 4)
+        except Exception as e:
+            logger.warning("Failed to fetch szDecimals for %s: %s", symbol, e)
+        return 4  # safe default
 
     async def execute_signal(
         self,
@@ -85,7 +178,26 @@ class ATEService:
     ) -> Execution | None:
         rate_key = f"ate:{user.id}"
         if not ate_rate_limiter.check(rate_key):
-            logger.warning(f"ATE rate limit reached for user {user.id}")
+            logger.warning("ATE rate limit reached for user %s", user.id)
+            return None
+
+        # ── Pre-execution wallet checks ──────────────────────────────
+        if not user.wallet_address:
+            logger.warning("User %s has no wallet connected, skipping", user.id)
+            return None
+
+        if not user.encrypted_private_key:
+            logger.warning("User %s has no private key stored, skipping", user.id)
+            return None
+
+        # Check wallet has perps margin
+        available_balance = await self._get_wallet_balance(user)
+        if available_balance is None or available_balance < 1.0:
+            logger.warning(
+                "User %s has insufficient perps margin ($%.2f), skipping execution",
+                user.id,
+                available_balance or 0,
+            )
             return None
 
         # Count open positions
@@ -105,13 +217,28 @@ class ATEService:
 
         can_execute, reason = self.evaluate_signal(signal, strategy, open_count)
         if not can_execute:
-            logger.info(f"Signal {signal.id} rejected: {reason}")
+            logger.info("Signal %s rejected: %s", signal.id, reason)
             return None
 
+        # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
-        quantity = self.calculate_position_size(strategy, entry_price)
+        sz_decimals = await self._get_sz_decimals(signal.symbol)
+        quantity = self.calculate_position_size(
+            strategy, entry_price, available_balance, sz_decimals
+        )
         if quantity <= 0:
-            logger.warning(f"Calculated position size is 0 for signal {signal.id}")
+            logger.warning("Calculated position size is 0 for signal %s", signal.id)
+            return None
+
+        # Final notional check
+        notional = quantity * entry_price
+        if notional > available_balance:
+            logger.warning(
+                "Notional $%.2f exceeds available balance $%.2f for signal %s",
+                notional,
+                available_balance,
+                signal.id,
+            )
             return None
 
         is_buy = signal.direction == SignalDirection.BUY
@@ -134,54 +261,68 @@ class ATEService:
         # Update signal status
         signal.status = SignalStatus.EXECUTING
 
-        # Attempt execution via Hyperliquid
-        private_key = None
-        if user.encrypted_private_key:
-            try:
-                private_key = decrypt_private_key(user.encrypted_private_key)
-            except ValueError:
-                logger.error(f"Failed to decrypt private key for user {user.id}")
-                execution.status = ExecutionStatus.FAILED
-                signal.status = SignalStatus.NEW
-                await db.flush()
-                return execution
+        # ── Decrypt private key ──────────────────────────────────────
+        try:
+            private_key = decrypt_private_key(user.encrypted_private_key)
+        except ValueError:
+            logger.error("Failed to decrypt private key for user %s", user.id)
+            execution.status = ExecutionStatus.FAILED
+            signal.status = SignalStatus.NEW
+            await db.flush()
+            return execution
 
-        if private_key:
-            # For connected wallets (agent key), pass account_address so the
-            # agent signs on behalf of the user's main Hyperliquid wallet.
-            # For generated wallets, wallet_address IS the trading wallet.
-            from app.models.enums import WalletType
+        # For connected wallets (agent key), pass account_address so the
+        # agent signs on behalf of the user's main Hyperliquid wallet.
+        # For generated wallets, wallet_address IS the trading wallet.
+        from app.models.enums import WalletType
 
-            account_address = (
-                user.wallet_address
-                if user.wallet_type == WalletType.CONNECTED
-                else None
+        account_address = (
+            user.wallet_address if user.wallet_type == WalletType.CONNECTED else None
+        )
+
+        logger.info(
+            "Placing order: %s %s qty=%s @ $%.2f (notional=$%.2f) for user %s "
+            "[wallet_type=%s, account=%s]",
+            "BUY" if is_buy else "SELL",
+            signal.symbol,
+            quantity,
+            entry_price,
+            notional,
+            user.id,
+            user.wallet_type.value if user.wallet_type else "none",
+            account_address or "direct",
+        )
+
+        order_result = await self.hyperliquid.place_order(
+            wallet_private_key=private_key,
+            symbol=signal.symbol,
+            is_buy=is_buy,
+            size=quantity,
+            account_address=account_address,
+            order_type="market",
+        )
+
+        if order_result.get("success"):
+            execution.status = ExecutionStatus.FILLED
+            execution.tx_hash = str(order_result.get("tx_hash", ""))
+            execution.executed_at = utc_now()
+            signal.status = SignalStatus.FILLED
+            logger.info(
+                "Order FILLED for signal %s: tx_hash=%s",
+                signal.id,
+                execution.tx_hash,
             )
-
-            order_result = await self.hyperliquid.place_order(
-                wallet_private_key=private_key,
-                symbol=signal.symbol,
-                is_buy=is_buy,
-                size=quantity,
-                account_address=account_address,
-                order_type="market",
-            )
-
-            if order_result.get("success"):
-                execution.status = ExecutionStatus.FILLED
-                execution.tx_hash = str(order_result.get("tx_hash", ""))
-                execution.executed_at = utc_now()
-                signal.status = SignalStatus.FILLED
-            else:
-                execution.status = ExecutionStatus.FAILED
-                signal.status = SignalStatus.NEW
-                logger.error(
-                    f"Order failed for signal {signal.id}: {order_result.get('error')}"
-                )
         else:
             execution.status = ExecutionStatus.FAILED
             signal.status = SignalStatus.NEW
-            logger.warning(f"No private key available for user {user.id}")
+            error_msg = order_result.get("error", "unknown")
+            logger.error(
+                "Order FAILED for signal %s (user %s, symbol %s): %s",
+                signal.id,
+                user.id,
+                signal.symbol,
+                error_msg,
+            )
 
         await db.flush()
 
