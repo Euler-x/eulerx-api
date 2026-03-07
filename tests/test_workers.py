@@ -765,6 +765,7 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
     async with TestSessionFactory() as session:
         user = User(
             id=user_id,
+            wallet_address="0x" + "a" * 40,
             wallet_address_hash="t" * 64,
             wallet_type=WalletType.GENERATED,
             encrypted_private_key=encrypt_private_key("0x" + "e" * 64),
@@ -819,6 +820,12 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
             patch(
                 "app.services.ate.VerificationService.log_execution_transaction",
                 new_callable=AsyncMock,
+            ),
+            patch.object(
+                ate, "_get_wallet_balance", new_callable=AsyncMock, return_value=5000.0
+            ),
+            patch.object(
+                ate, "_get_sz_decimals", new_callable=AsyncMock, return_value=4
             ),
         ):
             execution = await ate.execute_signal(session, signal, strategy, user)
