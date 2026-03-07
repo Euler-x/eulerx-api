@@ -70,9 +70,33 @@ class HyperliquidService:
         return data
 
     async def get_top_gainers(self, limit: int = 20) -> list[dict]:
+        """Fetch market data, enrich with 24h candles, and return the most
+        active symbols sorted by absolute price change * volume score.
+
+        This ensures the pipeline analyses volatile, high-volume symbols
+        rather than returning an arbitrary fixed slice of the metadata list.
+        """
         try:
             market_data = await self.get_market_data()
-            return market_data[:limit]
+            if not market_data:
+                return []
+
+            # Enrich with candle data so we can rank
+            enriched = await self.enrich_with_candles(market_data)
+
+            # Score each symbol: |price_change_24h%| * log(volume + 1)
+            import math
+
+            def _activity_score(sym: dict) -> float:
+                candle = sym.get("candle_summary", {})
+                change = abs(candle.get("price_change_24h_pct", 0))
+                volume = candle.get("total_volume_24h", 0)
+                volatility = abs(candle.get("volatility_pct", 0))
+                # Combine change, volatility and volume into a single score
+                return (change + volatility) * math.log1p(volume)
+
+            enriched.sort(key=_activity_score, reverse=True)
+            return enriched[:limit]
         except Exception as e:
             logger.error(f"Failed to fetch top gainers: {e}")
             return []

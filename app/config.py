@@ -180,7 +180,7 @@ class Settings(BaseSettings):
         description="How often to run the analysis pipeline (hours)",
     )
     analysis_top_symbols_limit: int = Field(
-        default=5,
+        default=15,
         description="Number of top symbols to analyze per run",
     )
     analysis_max_retries: int = Field(

@@ -15,6 +15,7 @@ Plus notifications:
 """
 
 import logging
+import random
 import uuid
 
 from celery import shared_task
@@ -47,12 +48,14 @@ settings = get_settings()
 
 
 async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid with 24h candle enrichment."""
+    """Fetch market data from Hyperliquid ranked by activity (price change + volume)."""
     service = HyperliquidService()
     symbols = await service.get_top_gainers(limit=settings.analysis_top_symbols_limit)
-    logger.info("Fetched %d symbols from Hyperliquid", len(symbols))
-    symbols = await service.enrich_with_candles(symbols)
-    logger.info("Enriched symbols with 24h candle data")
+    logger.info(
+        "Fetched top %d symbols: %s",
+        len(symbols),
+        ", ".join(s.get("symbol", "?") for s in symbols),
+    )
     return symbols
 
 
@@ -421,14 +424,18 @@ def run_analysis_pipeline(self) -> dict:
         )
 
         # Stage 3: Generate signals for each strategy (sequential to avoid API thundering herd)
+        # Shuffle symbol order per strategy so different strategies are more likely
+        # to pick up different tokens instead of all signaling the same one.
         total_signals = 0
         total_executions = 0
         all_signal_pairs: list[tuple[str, str]] = []  # (signal_id, strategy_id)
 
         for strategy_id in active_strategy_ids:
             try:
+                shuffled_data = list(market_data)
+                random.shuffle(shuffled_data)
                 signal_ids = run_async(
-                    _generate_signals_for_strategy_async(strategy_id, market_data)
+                    _generate_signals_for_strategy_async(strategy_id, shuffled_data)
                 )
                 if signal_ids:
                     total_signals += len(signal_ids)
