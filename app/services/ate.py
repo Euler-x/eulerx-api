@@ -168,6 +168,29 @@ class ATEService:
             logger.warning("Failed to fetch szDecimals for %s: %s", symbol, e)
         return 4  # safe default
 
+    def _create_failed_execution(
+        self,
+        signal: Signal,
+        user: User,
+        strategy: Strategy,
+        error_message: str,
+        entry_price: float | None = None,
+    ) -> Execution:
+        """Create a FAILED execution record with an error message."""
+        return Execution(
+            signal_id=signal.id,
+            user_id=user.id,
+            strategy_id=strategy.id,
+            wallet_address_hash=user.wallet_address_hash or "",
+            order_type=OrderType.MARKET,
+            direction=signal.direction,
+            entry_price=entry_price or float(signal.entry_price),
+            quantity=0,
+            leverage=min(strategy.leverage_limit, settings.ate_default_leverage),
+            status=ExecutionStatus.FAILED,
+            error_message=error_message[:500],
+        )
+
     async def execute_signal(
         self,
         db: AsyncSession,
@@ -200,21 +223,40 @@ class ATEService:
         # ── Pre-execution wallet checks ──────────────────────────────
         if not user.wallet_address:
             logger.warning("User %s has no wallet connected, skipping", user.id)
-            return None
+            execution = self._create_failed_execution(
+                signal, user, strategy, "No wallet connected"
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
 
         if not user.encrypted_private_key:
             logger.warning("User %s has no private key stored, skipping", user.id)
-            return None
+            execution = self._create_failed_execution(
+                signal, user, strategy, "No trading key configured"
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
 
         # Check wallet has perps margin
         available_balance = await self._get_wallet_balance(user)
         if available_balance is None or available_balance < 1.0:
+            balance_str = f"${available_balance:.2f}" if available_balance else "$0.00"
             logger.warning(
                 "User %s has insufficient perps margin ($%.2f), skipping execution",
                 user.id,
                 available_balance or 0,
             )
-            return None
+            execution = self._create_failed_execution(
+                signal,
+                user,
+                strategy,
+                f"Insufficient perps margin ({balance_str}). Transfer funds to perps to trade.",
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
 
         # Count open positions for this strategy
         result = await db.execute(
@@ -234,7 +276,10 @@ class ATEService:
         can_execute, reason = self.evaluate_signal(signal, strategy, open_count)
         if not can_execute:
             logger.info("Signal %s rejected: %s", signal.id, reason)
-            return None
+            execution = self._create_failed_execution(signal, user, strategy, reason)
+            db.add(execution)
+            await db.flush()
+            return execution
 
         # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
@@ -244,7 +289,16 @@ class ATEService:
         )
         if quantity <= 0:
             logger.warning("Calculated position size is 0 for signal %s", signal.id)
-            return None
+            execution = self._create_failed_execution(
+                signal,
+                user,
+                strategy,
+                "Position size too small for this asset price",
+                entry_price,
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
 
         # Final notional check
         notional = quantity * entry_price
@@ -255,7 +309,16 @@ class ATEService:
                 available_balance,
                 signal.id,
             )
-            return None
+            execution = self._create_failed_execution(
+                signal,
+                user,
+                strategy,
+                f"Order size (${notional:.2f}) exceeds available balance (${available_balance:.2f})",
+                entry_price,
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
 
         is_buy = signal.direction == SignalDirection.BUY
 
@@ -280,6 +343,7 @@ class ATEService:
         except ValueError:
             logger.error("Failed to decrypt private key for user %s", user.id)
             execution.status = ExecutionStatus.FAILED
+            execution.error_message = "Failed to decrypt trading key"
             await db.flush()
             return execution
 
@@ -328,6 +392,7 @@ class ATEService:
         else:
             execution.status = ExecutionStatus.FAILED
             error_msg = order_result.get("error", "unknown")
+            execution.error_message = str(error_msg)[:500]
             logger.error(
                 "Order FAILED for signal %s (user %s, strategy %s, symbol %s): %s",
                 signal.id,
@@ -591,11 +656,15 @@ class ATEService:
                     pnl_str,
                 )
             else:
+                close_error = close_result.get("error", "unknown")
+                execution.error_message = (
+                    f"Failed to close on {triggered}: {close_error}"[:500]
+                )
                 logger.error(
                     "Failed to close position %s for %s: %s",
                     execution.id,
                     triggered,
-                    close_result.get("error"),
+                    close_error,
                 )
 
         if closed:

@@ -80,6 +80,7 @@ class Execution(Base):
         Numeric(precision=18, scale=8), nullable=True
     )
     tx_hash: Mapped[Optional[str]] = mapped_column(String(66), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[ExecutionStatus] = mapped_column(
         SAEnum(
             ExecutionStatus,

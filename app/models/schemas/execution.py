@@ -20,6 +20,7 @@ class ExecutionResponse(BaseModel):
     leverage: float
     pnl: Optional[float]
     tx_hash: Optional[str]
+    error_message: Optional[str] = None
     status: ExecutionStatus
     executed_at: Optional[datetime]
     created_at: datetime
