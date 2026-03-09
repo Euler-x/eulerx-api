@@ -48,7 +48,7 @@ async def ate_fixtures(setup_db):
             name="Test Strategy",
             strategy_type=StrategyType.MODERATE,
             risk_profile=RiskProfile.MEDIUM,
-            capital_allocation=Decimal("10000"),
+            allocation_pct=50.0,
             is_active=True,
             max_positions=5,
         )
@@ -141,7 +141,7 @@ async def test_monitor_positions_sl_hit(setup_db, mock_hyperliquid_api):
             name="SL Test Strategy",
             strategy_type=StrategyType.AGGRESSIVE,
             risk_profile=RiskProfile.HIGH,
-            capital_allocation=Decimal("5000"),
+            allocation_pct=25.0,
             is_active=True,
             max_positions=3,
         )
@@ -223,7 +223,7 @@ async def test_monitor_positions_no_trigger(setup_db, mock_hyperliquid_api):
             name="No Trigger Strategy",
             strategy_type=StrategyType.CONSERVATIVE,
             risk_profile=RiskProfile.LOW,
-            capital_allocation=Decimal("20000"),
+            allocation_pct=100.0,
             is_active=True,
             max_positions=10,
         )

@@ -16,7 +16,7 @@ class StrategyAdmin(ModelView, model=Strategy):
         Strategy.user_id,
         Strategy.strategy_type,
         Strategy.risk_profile,
-        Strategy.capital_allocation,
+        Strategy.allocation_pct,
         Strategy.is_active,
         Strategy.timeframe,
         Strategy.created_at,
@@ -34,7 +34,7 @@ class StrategyAdmin(ModelView, model=Strategy):
     column_sortable_list = [
         Strategy.name,
         Strategy.strategy_type,
-        Strategy.capital_allocation,
+        Strategy.allocation_pct,
         Strategy.is_active,
         Strategy.created_at,
     ]

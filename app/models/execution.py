@@ -2,7 +2,16 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -91,4 +100,11 @@ class Execution(Base):
     user: Mapped["User"] = relationship(back_populates="executions")
     strategy: Mapped["Strategy"] = relationship(back_populates="executions")
 
-    __table_args__ = (Index("ix_executions_user_status", "user_id", "status"),)
+    __table_args__ = (
+        Index("ix_executions_user_status", "user_id", "status"),
+        UniqueConstraint(
+            "signal_id",
+            "strategy_id",
+            name="uq_execution_signal_strategy",
+        ),
+    )

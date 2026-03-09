@@ -2,8 +2,11 @@
 
 Three-stage pipeline triggered by Celery Beat every N hours:
   1. fetch_market_data — get top symbols from Hyperliquid
-  2. generate_signals_for_strategy — AI consensus signals per active strategy
-  3. execute_signal_task — auto-execute each signal via ATE
+  2. generate_signals — AI consensus signals (strategy-independent)
+  3. execute across strategies — auto-execute each signal via ATE per strategy
+
+Signal generation is purely market analysis — no strategy context.
+Strategies only apply during trade execution for risk management.
 
 Plus maintenance:
   - expire_stale_signals — clean up expired signals every 30 minutes
@@ -15,7 +18,6 @@ Plus notifications:
 """
 
 import logging
-import random
 import uuid
 
 from celery import shared_task
@@ -69,31 +71,83 @@ async def _get_active_strategy_ids_async() -> list[str]:
         return [str(sid) for sid in rows]
 
 
-async def _generate_signals_for_strategy_async(
-    strategy_id: str,
-    market_data: list[dict],
-) -> list[str]:
-    """Generate signals for a single strategy. Returns list of signal IDs."""
+async def _generate_signals_async(market_data: list[dict]) -> list[str]:
+    """Generate strategy-independent signals from market data.
+
+    Pure market analysis — no strategy context involved.
+    Returns list of signal IDs.
+    """
     ai_engine = AIEngineService()
 
     async with async_session_factory() as session:
         try:
-            # Load strategy with user relationship
-            result = await session.execute(
+            signals = await ai_engine.generate_signals(
+                symbols=market_data,
+                db=session,
+            )
+
+            if signals:
+                await session.commit()
+                generated_ids = [str(s.id) for s in signals]
+                logger.info("Generated %d signals", len(signals))
+                return generated_ids
+
+            logger.info("No actionable signals from market data")
+            return []
+
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _is_trading_halted(session) -> bool:
+    """Check if the global trading halt flag is active."""
+    result = await session.execute(
+        select(AdminConfig).where(AdminConfig.key == "trading_halt")
+    )
+    config = result.scalar_one_or_none()
+    return bool(config and config.value.get("halted"))
+
+
+async def _execute_signal_for_strategy_async(signal_id: str, strategy_id: str) -> dict:
+    """Execute a single signal for a specific strategy via ATE.
+
+    Strategy provides risk management context (position sizing, drawdown,
+    max positions, leverage) but the signal itself is strategy-independent.
+    """
+    ate_service = ATEService()
+
+    async with async_session_factory() as session:
+        try:
+            # Check global trading halt before executing anything
+            if await _is_trading_halted(session):
+                return {"status": "skipped", "reason": "Trading is halted"}
+
+            # Load signal
+            signal_result = await session.execute(
+                select(Signal).where(Signal.id == uuid.UUID(signal_id))
+            )
+            signal = signal_result.scalar_one_or_none()
+            if signal is None:
+                return {"status": "skipped", "reason": "Signal not found"}
+
+            if signal.status == SignalStatus.EXPIRED:
+                return {"status": "skipped", "reason": "Signal expired"}
+
+            if signal.expires_at and signal.expires_at < utc_now():
+                signal.status = SignalStatus.EXPIRED
+                await session.commit()
+                return {"status": "expired", "reason": "Signal expired"}
+
+            # Load strategy and user (strategy provides risk management)
+            strategy_result = await session.execute(
                 select(Strategy)
                 .options(selectinload(Strategy.user))
-                .where(
-                    Strategy.id == uuid.UUID(strategy_id),
-                    Strategy.is_active == True,  # noqa: E712
-                )
+                .where(Strategy.id == uuid.UUID(strategy_id))
             )
-            strategy = result.scalar_one_or_none()
-
-            if strategy is None:
-                logger.warning(
-                    "Strategy %s not found or inactive, skipping", strategy_id
-                )
-                return []
+            strategy = strategy_result.scalar_one_or_none()
+            if strategy is None or not strategy.is_active:
+                return {"status": "skipped", "reason": "Strategy not found or inactive"}
 
             user = strategy.user
 
@@ -121,106 +175,18 @@ async def _generate_signals_for_strategy_async(
                     user.id,
                     strategy_id,
                 )
-                return []
+                return {"status": "skipped", "reason": "Plan lacks ATE access"}
 
-            # Check drawdown before generating signals
-            ate_service = ATEService()
+            # Check drawdown before executing
             drawdown_hit = await ate_service.check_drawdown(session, strategy, user)
             if drawdown_hit:
                 logger.warning(
                     "Strategy %s hit drawdown limit, auto-paused", strategy_id
                 )
                 await session.commit()
-                return []
+                return {"status": "skipped", "reason": "Drawdown limit hit"}
 
-            # Generate signals
-            signals = await ai_engine.generate_signals(
-                symbols=market_data,
-                db=session,
-                strategy_id=strategy_id,
-            )
-
-            if signals:
-                await session.commit()
-                generated_ids = [str(s.id) for s in signals]
-                logger.info(
-                    "Generated %d signals for strategy %s",
-                    len(signals),
-                    strategy_id,
-                )
-
-                # Notify user of generated signals
-                try:
-                    notification_service = NotificationService()
-                    await notification_service.send_signal_generated(
-                        user=user,
-                        strategy_name=strategy.name,
-                        signal_count=len(signals),
-                    )
-                except Exception as e:
-                    logger.error("Failed to send signal generated email: %s", e)
-
-                return generated_ids
-
-            logger.info("No actionable signals for strategy %s", strategy_id)
-            return []
-
-        except Exception:
-            await session.rollback()
-            raise
-
-
-async def _is_trading_halted(session) -> bool:
-    """Check if the global trading halt flag is active."""
-    result = await session.execute(
-        select(AdminConfig).where(AdminConfig.key == "trading_halt")
-    )
-    config = result.scalar_one_or_none()
-    return bool(config and config.value.get("halted"))
-
-
-async def _execute_signal_async(signal_id: str, strategy_id: str) -> dict:
-    """Execute a single signal via the ATE. Returns execution result dict."""
-    ate_service = ATEService()
-
-    async with async_session_factory() as session:
-        try:
-            # Check global trading halt before executing anything
-            if await _is_trading_halted(session):
-                return {"status": "skipped", "reason": "Trading is halted"}
-
-            # Load signal
-            signal_result = await session.execute(
-                select(Signal).where(Signal.id == uuid.UUID(signal_id))
-            )
-            signal = signal_result.scalar_one_or_none()
-            if signal is None:
-                return {"status": "skipped", "reason": "Signal not found"}
-
-            if signal.status != SignalStatus.NEW:
-                return {
-                    "status": "skipped",
-                    "reason": f"Signal status is {signal.status.value}",
-                }
-
-            if signal.expires_at and signal.expires_at < utc_now():
-                signal.status = SignalStatus.EXPIRED
-                await session.commit()
-                return {"status": "expired", "reason": "Signal expired"}
-
-            # Load strategy and user
-            strategy_result = await session.execute(
-                select(Strategy)
-                .options(selectinload(Strategy.user))
-                .where(Strategy.id == uuid.UUID(strategy_id))
-            )
-            strategy = strategy_result.scalar_one_or_none()
-            if strategy is None or not strategy.is_active:
-                return {"status": "skipped", "reason": "Strategy not found or inactive"}
-
-            user = strategy.user
-
-            # Execute via ATE
+            # Execute via ATE (strategy provides risk management context)
             execution = await ate_service.execute_signal(
                 db=session,
                 signal=signal,
@@ -232,6 +198,17 @@ async def _execute_signal_async(signal_id: str, strategy_id: str) -> dict:
 
             if execution is None:
                 return {"status": "rejected", "reason": "ATE rejected signal"}
+
+            # Send notification on successful execution
+            try:
+                notification_service = NotificationService()
+                await notification_service.send_signal_generated(
+                    user=user,
+                    strategy_name=strategy.name,
+                    signal_count=1,
+                )
+            except Exception as e:
+                logger.error("Failed to send signal notification: %s", e)
 
             return {
                 "status": execution.status.value,
@@ -297,7 +274,7 @@ def fetch_market_data(self) -> list[dict]:
 
 
 @shared_task(
-    name="app.worker.tasks.generate_signals_for_strategy",
+    name="app.worker.tasks.generate_signals",
     bind=True,
     max_retries=2,
     default_retry_delay=60,
@@ -306,27 +283,15 @@ def fetch_market_data(self) -> list[dict]:
     acks_late=True,
     track_started=True,
 )
-def generate_signals_for_strategy(
-    self,
-    strategy_id: str,
-    market_data: list[dict],
-) -> list[str]:
-    """Generate AI signals for a specific strategy. Stage 2 of pipeline."""
+def generate_signals(self, market_data: list[dict]) -> list[str]:
+    """Generate strategy-independent AI signals. Stage 2 of pipeline."""
     try:
-        return run_async(_generate_signals_for_strategy_async(strategy_id, market_data))
+        return run_async(_generate_signals_async(market_data))
     except SoftTimeLimitExceeded:
-        logger.error(
-            "generate_signals_for_strategy(%s) hit soft time limit",
-            strategy_id,
-        )
+        logger.error("generate_signals hit soft time limit")
         raise
     except Exception as exc:
-        logger.error(
-            "generate_signals_for_strategy(%s) failed: %s",
-            strategy_id,
-            exc,
-            exc_info=True,
-        )
+        logger.error("generate_signals failed: %s", exc, exc_info=True)
         raise self.retry(exc=exc)
 
 
@@ -345,13 +310,13 @@ def execute_signal_task(
     signal_id: str,
     strategy_id: str,
 ) -> dict:
-    """Execute a single signal via the ATE. Stage 3 of pipeline.
+    """Execute a single signal for a strategy via the ATE. Stage 3 of pipeline.
 
     Low retry count (1) to minimize double-execution risk.
     ATE checks signal.status == NEW for idempotency.
     """
     try:
-        return run_async(_execute_signal_async(signal_id, strategy_id))
+        return run_async(_execute_signal_for_strategy_async(signal_id, strategy_id))
     except SoftTimeLimitExceeded:
         logger.error("execute_signal_task(%s) hit soft time limit", signal_id)
         raise
@@ -379,10 +344,14 @@ def run_analysis_pipeline(self) -> dict:
 
     Triggered by Celery Beat every N hours. Flow:
       1. Fetch market data from Hyperliquid
-      2. Query all active strategies
-      3. For each strategy: generate signals via AI Engine
-      4. For each new signal: execute via ATE
+      2. Generate signals (strategy-independent market analysis)
+      3. Get all active strategies
+      4. For each strategy × each signal: execute via ATE
       5. Return summary
+
+    Signal generation and execution are fully decoupled — signals are
+    pure market analysis, strategies only provide risk management context
+    during execution.
     """
     pipeline_id = str(uuid.uuid4())[:8]
     logger.info("[Pipeline %s] Starting analysis pipeline", pipeline_id)
@@ -397,12 +366,32 @@ def run_analysis_pipeline(self) -> dict:
                 "pipeline_id": pipeline_id,
                 "status": "completed",
                 "market_data_count": 0,
-                "strategies_processed": 0,
                 "signals_generated": 0,
+                "strategies_processed": 0,
                 "executions_attempted": 0,
             }
 
-        # Stage 2: Get all active strategies
+        # Stage 2: Generate signals (strategy-independent)
+        signal_ids = run_async(_generate_signals_async(market_data))
+
+        logger.info(
+            "[Pipeline %s] Generated %d signals from %d symbols",
+            pipeline_id,
+            len(signal_ids),
+            len(market_data),
+        )
+
+        if not signal_ids:
+            return {
+                "pipeline_id": pipeline_id,
+                "status": "completed",
+                "market_data_count": len(market_data),
+                "signals_generated": 0,
+                "strategies_processed": 0,
+                "executions_attempted": 0,
+            }
+
+        # Stage 3: Get all active strategies
         active_strategy_ids = run_async(_get_active_strategy_ids_async())
 
         if not active_strategy_ids:
@@ -411,71 +400,55 @@ def run_analysis_pipeline(self) -> dict:
                 "pipeline_id": pipeline_id,
                 "status": "completed",
                 "market_data_count": len(market_data),
+                "signals_generated": len(signal_ids),
                 "strategies_processed": 0,
-                "signals_generated": 0,
                 "executions_attempted": 0,
             }
 
         logger.info(
-            "[Pipeline %s] Processing %d strategies with %d symbols",
+            "[Pipeline %s] Executing %d signals across %d strategies",
             pipeline_id,
+            len(signal_ids),
             len(active_strategy_ids),
-            len(market_data),
         )
 
-        # Stage 3: Generate signals for each strategy (sequential to avoid API thundering herd)
-        # Shuffle symbol order per strategy so different strategies are more likely
-        # to pick up different tokens instead of all signaling the same one.
-        total_signals = 0
+        # Stage 4: Execute each signal for each strategy
+        # Strategies provide risk management (position sizing, drawdown, leverage).
+        # Once a signal is FILLED by one strategy, others will skip it
+        # (signal.status != NEW check in _execute_signal_for_strategy_async).
         total_executions = 0
-        all_signal_pairs: list[tuple[str, str]] = []  # (signal_id, strategy_id)
 
         for strategy_id in active_strategy_ids:
-            try:
-                shuffled_data = list(market_data)
-                random.shuffle(shuffled_data)
-                signal_ids = run_async(
-                    _generate_signals_for_strategy_async(strategy_id, shuffled_data)
-                )
-                if signal_ids:
-                    total_signals += len(signal_ids)
-                    all_signal_pairs.extend((sid, strategy_id) for sid in signal_ids)
-            except Exception as exc:
-                logger.error(
-                    "[Pipeline %s] Signal generation failed for strategy %s: %s",
-                    pipeline_id,
-                    strategy_id,
-                    exc,
-                )
-                continue
-
-        # Stage 4: Execute each generated signal
-        for signal_id, strategy_id in all_signal_pairs:
-            try:
-                result = run_async(_execute_signal_async(signal_id, strategy_id))
-                if result.get("status") in ("filled", "FILLED"):
-                    total_executions += 1
-                logger.info(
-                    "[Pipeline %s] Signal %s: %s",
-                    pipeline_id,
-                    signal_id,
-                    result,
-                )
-            except Exception as exc:
-                logger.error(
-                    "[Pipeline %s] Execution failed for signal %s: %s",
-                    pipeline_id,
-                    signal_id,
-                    exc,
-                )
-                continue
+            for signal_id in signal_ids:
+                try:
+                    result = run_async(
+                        _execute_signal_for_strategy_async(signal_id, strategy_id)
+                    )
+                    if result.get("status") in ("filled", "FILLED"):
+                        total_executions += 1
+                    logger.info(
+                        "[Pipeline %s] Signal %s / Strategy %s: %s",
+                        pipeline_id,
+                        signal_id,
+                        strategy_id,
+                        result,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[Pipeline %s] Execution failed for signal %s strategy %s: %s",
+                        pipeline_id,
+                        signal_id,
+                        strategy_id,
+                        exc,
+                    )
+                    continue
 
         summary = {
             "pipeline_id": pipeline_id,
             "status": "completed",
             "market_data_count": len(market_data),
+            "signals_generated": len(signal_ids),
             "strategies_processed": len(active_strategy_ids),
-            "signals_generated": total_signals,
             "executions_attempted": total_executions,
         }
         logger.info("[Pipeline %s] Pipeline completed: %s", pipeline_id, summary)

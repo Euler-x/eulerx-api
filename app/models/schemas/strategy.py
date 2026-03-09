@@ -13,7 +13,7 @@ class StrategyCreate(BaseModel):
     risk_profile: RiskProfile
     leverage_limit: float = Field(default=1.0, ge=1.0, le=100.0)
     max_positions: int = Field(default=5, ge=1, le=50)
-    capital_allocation: float = Field(..., gt=0)
+    allocation_pct: float = Field(default=100.0, ge=1.0, le=100.0)
     max_drawdown_percent: float = Field(default=10.0, ge=1.0, le=100.0)
     daily_loss_cap_percent: Optional[float] = Field(None, ge=0.1, le=100.0)
     target_volatility: Optional[float] = Field(None, ge=0)
@@ -28,7 +28,7 @@ class StrategyUpdate(BaseModel):
     risk_profile: Optional[RiskProfile] = None
     leverage_limit: Optional[float] = Field(None, ge=1.0, le=100.0)
     max_positions: Optional[int] = Field(None, ge=1, le=50)
-    capital_allocation: Optional[float] = Field(None, gt=0)
+    allocation_pct: Optional[float] = Field(None, gt=0)
     max_drawdown_percent: Optional[float] = Field(None, ge=1.0, le=100.0)
     daily_loss_cap_percent: Optional[float] = Field(None, ge=0.1, le=100.0)
     target_volatility: Optional[float] = Field(None, ge=0)
@@ -46,7 +46,7 @@ class StrategyResponse(BaseModel):
     risk_profile: RiskProfile
     leverage_limit: float
     max_positions: int
-    capital_allocation: float
+    allocation_pct: float
     max_drawdown_percent: float
     is_active: bool
     daily_loss_cap_percent: Optional[float] = None

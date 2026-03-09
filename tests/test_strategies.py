@@ -13,7 +13,7 @@ async def test_create_strategy(client, test_user):
             "name": "My Test Strategy",
             "strategy_type": "moderate",
             "risk_profile": "medium",
-            "capital_allocation": 1000.0,
+            "allocation_pct": 50.0,
             "leverage_limit": 2.0,
             "max_positions": 5,
             "max_drawdown_percent": 10.0,
@@ -50,7 +50,7 @@ async def test_get_strategy_by_id(client, test_user):
             "name": "Get By ID Strategy",
             "strategy_type": "conservative",
             "risk_profile": "low",
-            "capital_allocation": 500.0,
+            "allocation_pct": 25.0,
         },
     )
     strategy_id = create_resp.json()["id"]
@@ -73,7 +73,7 @@ async def test_update_strategy(client, test_user):
             "name": "Update Me",
             "strategy_type": "aggressive",
             "risk_profile": "high",
-            "capital_allocation": 2000.0,
+            "allocation_pct": 75.0,
         },
     )
     strategy_id = create_resp.json()["id"]
@@ -98,7 +98,7 @@ async def test_delete_strategy(client, test_user):
             "name": "Delete Me",
             "strategy_type": "custom",
             "risk_profile": "low",
-            "capital_allocation": 100.0,
+            "allocation_pct": 100.0,
         },
     )
     strategy_id = create_resp.json()["id"]

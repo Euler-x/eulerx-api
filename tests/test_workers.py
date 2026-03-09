@@ -57,7 +57,7 @@ async def pipeline_fixtures(setup_db):
             name="Pipeline Strategy",
             strategy_type=StrategyType.MODERATE,
             risk_profile=RiskProfile.MEDIUM,
-            capital_allocation=Decimal("10000"),
+            allocation_pct=50.0,
             is_active=True,
             max_positions=5,
             max_drawdown_percent=10.0,
@@ -67,7 +67,6 @@ async def pipeline_fixtures(setup_db):
 
         signal = Signal(
             id=signal_id,
-            strategy_id=strategy_id,
             symbol="BTC",
             direction=SignalDirection.BUY,
             confidence=0.9,
@@ -128,18 +127,16 @@ async def test_get_active_strategy_ids(pipeline_fixtures):
     assert str(pipeline_fixtures["strategy_id"]) in result
 
 
-# ── Test: Generate Signals For Strategy ────────────────────────────
+# ── Test: Generate Signals (Strategy-Independent) ──────────────────
 
 
 @pytest.mark.asyncio
-async def test_generate_signals_creates_signals(pipeline_fixtures):
-    """_generate_signals_for_strategy_async generates signals via AI engine."""
-    from app.worker.tasks import _generate_signals_for_strategy_async
+async def test_generate_signals_creates_signals(setup_db):
+    """_generate_signals_async generates strategy-independent signals."""
+    from app.worker.tasks import _generate_signals_async
 
-    strategy_id = str(pipeline_fixtures["strategy_id"])
     market_data = [{"symbol": "BTC", "price": "50000"}]
 
-    # Create mock signals that the AI engine returns
     mock_signal = MagicMock()
     mock_signal.id = uuid.uuid4()
 
@@ -153,40 +150,17 @@ async def test_generate_signals_creates_signals(pipeline_fixtures):
             new_callable=AsyncMock,
             return_value=[mock_signal],
         ),
-        patch(
-            "app.worker.tasks.NotificationService.send_signal_generated",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "app.worker.tasks.ATEService.check_drawdown",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
     ):
-        result = await _generate_signals_for_strategy_async(strategy_id, market_data)
+        result = await _generate_signals_async(market_data)
 
     assert len(result) == 1
     assert result[0] == str(mock_signal.id)
 
 
 @pytest.mark.asyncio
-async def test_generate_signals_skips_inactive_strategy(setup_db):
-    """Returns empty list for an inactive/nonexistent strategy."""
-    from app.worker.tasks import _generate_signals_for_strategy_async
-
-    fake_id = str(uuid.uuid4())
-    with patch("app.worker.tasks.async_session_factory", TestSessionFactory):
-        result = await _generate_signals_for_strategy_async(fake_id, [])
-
-    assert result == []
-
-
-@pytest.mark.asyncio
-async def test_generate_signals_paused_on_drawdown(pipeline_fixtures):
-    """Strategy is paused when drawdown limit is exceeded."""
-    from app.worker.tasks import _generate_signals_for_strategy_async
-
-    strategy_id = str(pipeline_fixtures["strategy_id"])
+async def test_generate_signals_returns_empty_on_no_actionable(setup_db):
+    """Returns empty list when AI engine finds no actionable signals."""
+    from app.worker.tasks import _generate_signals_async
 
     with (
         patch(
@@ -194,25 +168,23 @@ async def test_generate_signals_paused_on_drawdown(pipeline_fixtures):
             TestSessionFactory,
         ),
         patch(
-            "app.worker.tasks.ATEService.check_drawdown",
+            "app.worker.tasks.AIEngineService.generate_signals",
             new_callable=AsyncMock,
-            return_value=True,
+            return_value=[],
         ),
     ):
-        result = await _generate_signals_for_strategy_async(
-            strategy_id, [{"symbol": "BTC"}]
-        )
+        result = await _generate_signals_async([{"symbol": "BTC"}])
 
     assert result == []
 
 
-# ── Test: Execute Signal ───────────────────────────────────────────
+# ── Test: Execute Signal For Strategy ─────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_execute_signal_fills_order(pipeline_fixtures):
-    """_execute_signal_async executes a NEW signal via ATE."""
-    from app.worker.tasks import _execute_signal_async
+    """_execute_signal_for_strategy_async executes a NEW signal via ATE."""
+    from app.worker.tasks import _execute_signal_for_strategy_async
 
     signal_id = str(pipeline_fixtures["signal_id"])
     strategy_id = str(pipeline_fixtures["strategy_id"])
@@ -231,8 +203,17 @@ async def test_execute_signal_fills_order(pipeline_fixtures):
             new_callable=AsyncMock,
             return_value=mock_execution,
         ),
+        patch(
+            "app.worker.tasks.ATEService.check_drawdown",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "app.worker.tasks.NotificationService.send_signal_generated",
+            new_callable=AsyncMock,
+        ),
     ):
-        result = await _execute_signal_async(signal_id, strategy_id)
+        result = await _execute_signal_for_strategy_async(signal_id, strategy_id)
 
     assert result["status"] == "filled"
     assert "execution_id" in result
@@ -241,37 +222,39 @@ async def test_execute_signal_fills_order(pipeline_fixtures):
 @pytest.mark.asyncio
 async def test_execute_signal_not_found(setup_db):
     """Returns skipped when signal ID doesn't exist."""
-    from app.worker.tasks import _execute_signal_async
+    from app.worker.tasks import _execute_signal_for_strategy_async
 
     with patch("app.worker.tasks.async_session_factory", TestSessionFactory):
-        result = await _execute_signal_async(str(uuid.uuid4()), str(uuid.uuid4()))
+        result = await _execute_signal_for_strategy_async(
+            str(uuid.uuid4()), str(uuid.uuid4())
+        )
 
     assert result["status"] == "skipped"
     assert "not found" in result["reason"]
 
 
 @pytest.mark.asyncio
-async def test_execute_signal_rejects_non_new(pipeline_fixtures):
-    """Signal with status != NEW is skipped."""
-    from app.worker.tasks import _execute_signal_async
+async def test_execute_signal_skips_expired(pipeline_fixtures):
+    """Signal with status EXPIRED is skipped."""
+    from app.worker.tasks import _execute_signal_for_strategy_async
 
     signal_id = pipeline_fixtures["signal_id"]
     strategy_id = str(pipeline_fixtures["strategy_id"])
 
-    # Set signal status to FILLED (not NEW)
+    # Set signal status to EXPIRED
     async with TestSessionFactory() as session:
         from sqlalchemy import select
 
         result = await session.execute(select(Signal).where(Signal.id == signal_id))
         signal = result.scalar_one()
-        signal.status = SignalStatus.FILLED
+        signal.status = SignalStatus.EXPIRED
         await session.commit()
 
     with patch("app.worker.tasks.async_session_factory", TestSessionFactory):
-        result = await _execute_signal_async(str(signal_id), strategy_id)
+        result = await _execute_signal_for_strategy_async(str(signal_id), strategy_id)
 
     assert result["status"] == "skipped"
-    assert "status" in result["reason"].lower()
+    assert "expired" in result["reason"].lower()
 
     # Reset signal status for other tests
     async with TestSessionFactory() as session:
@@ -279,6 +262,31 @@ async def test_execute_signal_rejects_non_new(pipeline_fixtures):
         signal = result.scalar_one()
         signal.status = SignalStatus.NEW
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_execute_signal_skips_on_drawdown(pipeline_fixtures):
+    """Signal execution is skipped when strategy hits drawdown limit."""
+    from app.worker.tasks import _execute_signal_for_strategy_async
+
+    signal_id = str(pipeline_fixtures["signal_id"])
+    strategy_id = str(pipeline_fixtures["strategy_id"])
+
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.worker.tasks.ATEService.check_drawdown",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        result = await _execute_signal_for_strategy_async(signal_id, strategy_id)
+
+    assert result["status"] == "skipped"
+    assert "drawdown" in result["reason"].lower()
 
 
 # ── Test: Expire Stale Signals ─────────────────────────────────────
@@ -289,33 +297,10 @@ async def test_expire_stale_signals(setup_db):
     """_expire_stale_signals_async marks expired signals."""
     from app.worker.tasks import _expire_stale_signals_async
 
-    strategy_id = uuid.uuid4()
-    user_id = uuid.uuid4()
-
     async with TestSessionFactory() as session:
-        user = User(
-            id=user_id,
-            wallet_address_hash="q" * 64,
-            wallet_type=WalletType.CONNECTED,
-        )
-        session.add(user)
-
-        strategy = Strategy(
-            id=strategy_id,
-            user_id=user_id,
-            name="Expire Test",
-            strategy_type=StrategyType.CONSERVATIVE,
-            risk_profile=RiskProfile.LOW,
-            capital_allocation=Decimal("1000"),
-            is_active=True,
-            max_positions=5,
-        )
-        session.add(strategy)
-
-        # Create an expired signal
+        # Create an expired signal (no strategy_id — strategy-independent)
         expired_signal = Signal(
             id=uuid.uuid4(),
-            strategy_id=strategy_id,
             symbol="DOGE",
             direction=SignalDirection.BUY,
             confidence=0.7,
@@ -328,7 +313,6 @@ async def test_expire_stale_signals(setup_db):
         # Create a non-expired signal
         active_signal = Signal(
             id=uuid.uuid4(),
-            strategy_id=strategy_id,
             symbol="LINK",
             direction=SignalDirection.BUY,
             confidence=0.8,
@@ -441,7 +425,7 @@ async def test_monitor_open_positions_task(setup_db, mock_hyperliquid_api):
             name="Monitor Task Strategy",
             strategy_type=StrategyType.MODERATE,
             risk_profile=RiskProfile.MEDIUM,
-            capital_allocation=Decimal("5000"),
+            allocation_pct=25.0,
             is_active=True,
             max_positions=5,
         )
@@ -449,7 +433,6 @@ async def test_monitor_open_positions_task(setup_db, mock_hyperliquid_api):
 
         signal = Signal(
             id=signal_id,
-            strategy_id=strategy_id,
             symbol="ETH",
             direction=SignalDirection.BUY,
             confidence=0.85,
@@ -522,25 +505,6 @@ async def test_run_analysis_pipeline_no_market_data(setup_db):
 async def test_run_analysis_pipeline_no_active_strategies(setup_db):
     """Pipeline handles no active strategies gracefully."""
 
-    # Use a fresh DB with no active strategies by querying with a filter
-    with (
-        patch("app.worker.tasks.async_session_factory", TestSessionFactory),
-        patch(
-            "app.worker.tasks.select",
-            side_effect=lambda *args: (
-                __import__("sqlalchemy")
-                .select(*args)
-                .where(
-                    Strategy.id == uuid.uuid4()  # Non-existent ID
-                )
-            ),
-        ),
-    ):
-        pass  # Can't easily mock this way
-
-    # Instead, test the orchestrator logic directly
-    # by mocking the helper functions
-
     with (
         patch(
             "app.worker.tasks._fetch_market_data_async",
@@ -553,7 +517,6 @@ async def test_run_analysis_pipeline_no_active_strategies(setup_db):
             return_value=[],
         ) as mock_ids,
     ):
-        # The run_analysis_pipeline function is synchronous and calls run_async
         # Test the orchestration logic by calling the pieces
         market_data = await mock_fetch()
         strategy_ids = await mock_ids()
@@ -684,20 +647,39 @@ def test_evaluate_signal_max_positions_rejected():
 
 
 def test_calculate_position_size():
-    """Position size calculated correctly based on risk profile."""
+    """Position size calculated correctly based on risk profile and wallet balance."""
     from app.services.ate import ATEService
 
     ate = ATEService()
 
     strategy = MagicMock()
-    strategy.capital_allocation = Decimal("10000")
+    strategy.allocation_pct = 50.0  # 50% of wallet balance
     strategy.leverage_limit = 2.0
     strategy.risk_profile = MagicMock()
     strategy.risk_profile.value = "medium"  # 5% risk multiplier
 
-    size = ate.calculate_position_size(strategy, entry_price=50000.0)
+    # available_balance=20000, allocation_pct=50% → effective=10000
     # 10000 * 0.05 * min(2.0, ate_default_leverage=1.0) / 50000 = 0.01
+    size = ate.calculate_position_size(
+        strategy, entry_price=50000.0, available_balance=20000.0
+    )
     assert size == 0.01
+
+
+def test_calculate_position_size_no_balance():
+    """Position size is 0 when no wallet balance available."""
+    from app.services.ate import ATEService
+
+    ate = ATEService()
+
+    strategy = MagicMock()
+    strategy.allocation_pct = 50.0
+    strategy.leverage_limit = 2.0
+    strategy.risk_profile = MagicMock()
+    strategy.risk_profile.value = "medium"
+
+    size = ate.calculate_position_size(strategy, entry_price=50000.0)
+    assert size == 0.0
 
 
 def test_calculate_position_size_zero_price():
@@ -707,12 +689,14 @@ def test_calculate_position_size_zero_price():
     ate = ATEService()
 
     strategy = MagicMock()
-    strategy.capital_allocation = Decimal("10000")
+    strategy.allocation_pct = 50.0
     strategy.leverage_limit = 2.0
     strategy.risk_profile = MagicMock()
     strategy.risk_profile.value = "medium"
 
-    size = ate.calculate_position_size(strategy, entry_price=0.0)
+    size = ate.calculate_position_size(
+        strategy, entry_price=0.0, available_balance=10000.0
+    )
     assert size == 0.0
 
 
@@ -739,9 +723,14 @@ async def test_check_drawdown_within_limit(pipeline_fixtures):
         )
         user = user_result.scalar_one()
 
-        with patch(
-            "app.services.ate.NotificationService.send_strategy_paused",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "app.services.ate.NotificationService.send_strategy_paused",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                ate, "_get_wallet_balance", new_callable=AsyncMock, return_value=10000.0
+            ),
         ):
             hit = await ate.check_drawdown(session, strategy, user)
 
@@ -778,7 +767,7 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
             name="Execute Test",
             strategy_type=StrategyType.MODERATE,
             risk_profile=RiskProfile.MEDIUM,
-            capital_allocation=Decimal("10000"),
+            allocation_pct=50.0,
             is_active=True,
             max_positions=5,
             leverage_limit=2.0,
@@ -787,7 +776,6 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
 
         signal = Signal(
             id=signal_id,
-            strategy_id=strategy_id,
             symbol="BTC",
             direction=SignalDirection.BUY,
             confidence=0.9,

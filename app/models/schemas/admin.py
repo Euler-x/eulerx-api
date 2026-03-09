@@ -74,7 +74,7 @@ class AdminStrategyUpdate(BaseModel):
     risk_profile: Optional[RiskProfile] = None
     leverage_limit: Optional[float] = Field(None, ge=1.0, le=100.0)
     max_positions: Optional[int] = Field(None, ge=1, le=50)
-    capital_allocation: Optional[float] = Field(None, gt=0)
+    allocation_pct: Optional[float] = Field(None, ge=1.0, le=100.0)
     max_drawdown_percent: Optional[float] = Field(None, gt=0, le=100)
     is_active: Optional[bool] = None
 

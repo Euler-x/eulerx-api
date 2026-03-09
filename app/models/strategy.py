@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,9 +46,7 @@ class Strategy(Base, TimestampMixin):
     )
     leverage_limit: Mapped[float] = mapped_column(Float, default=1.0)
     max_positions: Mapped[int] = mapped_column(Integer, default=5)
-    capital_allocation: Mapped[float] = mapped_column(
-        Numeric(precision=18, scale=8), nullable=False
-    )
+    allocation_pct: Mapped[float] = mapped_column(Float, nullable=False, default=100.0)
     max_drawdown_percent: Mapped[float] = mapped_column(Float, default=10.0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
 

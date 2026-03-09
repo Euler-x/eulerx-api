@@ -46,8 +46,8 @@ class ATEService:
                 f"Confidence {signal.confidence} below threshold {settings.ate_confidence_threshold}",
             )
 
-        if signal.status != SignalStatus.NEW:
-            return False, f"Signal status is {signal.status.value}, expected NEW"
+        if signal.status == SignalStatus.EXPIRED:
+            return False, "Signal has expired"
 
         if signal.expires_at and signal.expires_at < utc_now():
             return False, "Signal has expired"
@@ -64,26 +64,25 @@ class ATEService:
         available_balance: float | None = None,
         sz_decimals: int = 4,
     ) -> float:
-        """Calculate position size capped to actual wallet balance.
+        """Calculate position size based on wallet balance percentage.
 
-        Uses the smaller of strategy.capital_allocation and the user's live
-        wallet balance so orders never exceed available margin.
+        Uses strategy.allocation_pct (1-100%) of the user's available wallet
+        balance to determine effective capital for position sizing.
         """
-        capital = float(strategy.capital_allocation)
+        if available_balance is None or available_balance <= 0:
+            return 0.0
+
+        # allocation_pct is 1-100, representing percentage of wallet balance
+        effective_capital = available_balance * (strategy.allocation_pct / 100)
         leverage = min(strategy.leverage_limit, settings.ate_default_leverage)
 
-        # Cap capital to actual wallet balance (with 10% safety margin for fees)
-        if available_balance is not None and available_balance > 0:
-            effective_capital = min(capital, available_balance * 0.9)
-            logger.info(
-                "Position sizing: strategy_capital=$%.2f, wallet_balance=$%.2f, "
-                "effective=$%.2f",
-                capital,
-                available_balance,
-                effective_capital,
-            )
-        else:
-            effective_capital = capital
+        logger.info(
+            "Position sizing: allocation_pct=%.1f%%, wallet_balance=$%.2f, "
+            "effective=$%.2f",
+            strategy.allocation_pct,
+            available_balance,
+            effective_capital,
+        )
 
         risk_multiplier = {
             "low": 0.02,
@@ -181,6 +180,23 @@ class ATEService:
             logger.warning("ATE rate limit reached for user %s", user.id)
             return None
 
+        # ── Per-(signal, strategy) idempotency ───────────────────────
+        # Signals are shared across strategies. Prevent the same strategy
+        # from executing the same signal twice.
+        existing = await db.execute(
+            select(func.count(Execution.id)).where(
+                Execution.signal_id == signal.id,
+                Execution.strategy_id == strategy.id,
+            )
+        )
+        if (existing.scalar() or 0) > 0:
+            logger.info(
+                "Signal %s already executed by strategy %s, skipping",
+                signal.id,
+                strategy.id,
+            )
+            return None
+
         # ── Pre-execution wallet checks ──────────────────────────────
         if not user.wallet_address:
             logger.warning("User %s has no wallet connected, skipping", user.id)
@@ -200,7 +216,7 @@ class ATEService:
             )
             return None
 
-        # Count open positions
+        # Count open positions for this strategy
         result = await db.execute(
             select(func.count(Execution.id)).where(
                 Execution.user_id == user.id,
@@ -243,7 +259,7 @@ class ATEService:
 
         is_buy = signal.direction == SignalDirection.BUY
 
-        # Create execution record
+        # Create execution record (idempotency: unique signal_id + strategy_id)
         execution = Execution(
             signal_id=signal.id,
             user_id=user.id,
@@ -258,16 +274,12 @@ class ATEService:
         )
         db.add(execution)
 
-        # Update signal status
-        signal.status = SignalStatus.EXECUTING
-
         # ── Decrypt private key ──────────────────────────────────────
         try:
             private_key = decrypt_private_key(user.encrypted_private_key)
         except ValueError:
             logger.error("Failed to decrypt private key for user %s", user.id)
             execution.status = ExecutionStatus.FAILED
-            signal.status = SignalStatus.NEW
             await db.flush()
             return execution
 
@@ -281,14 +293,15 @@ class ATEService:
         )
 
         logger.info(
-            "Placing order: %s %s qty=%s @ $%.2f (notional=$%.2f) for user %s "
-            "[wallet_type=%s, account=%s]",
+            "Placing order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
+            "for user %s strategy %s [wallet_type=%s, account=%s]",
             "BUY" if is_buy else "SELL",
             signal.symbol,
             quantity,
             entry_price,
             notional,
             user.id,
+            strategy.id,
             user.wallet_type.value if user.wallet_type else "none",
             account_address or "direct",
         )
@@ -306,20 +319,20 @@ class ATEService:
             execution.status = ExecutionStatus.FILLED
             execution.tx_hash = str(order_result.get("tx_hash", ""))
             execution.executed_at = utc_now()
-            signal.status = SignalStatus.FILLED
             logger.info(
-                "Order FILLED for signal %s: tx_hash=%s",
+                "Order FILLED for signal %s strategy %s: tx_hash=%s",
                 signal.id,
+                strategy.id,
                 execution.tx_hash,
             )
         else:
             execution.status = ExecutionStatus.FAILED
-            signal.status = SignalStatus.NEW
             error_msg = order_result.get("error", "unknown")
             logger.error(
-                "Order FAILED for signal %s (user %s, symbol %s): %s",
+                "Order FAILED for signal %s (user %s, strategy %s, symbol %s): %s",
                 signal.id,
                 user.id,
+                strategy.id,
                 signal.symbol,
                 error_msg,
             )
@@ -373,11 +386,16 @@ class ATEService:
         )
         daily_pnl = result.scalar() or 0.0
 
-        capital = float(strategy.capital_allocation)
-        if capital <= 0:
+        # Use wallet balance to calculate drawdown percentage
+        available_balance = await self._get_wallet_balance(user)
+        if available_balance is None or available_balance <= 0:
             return False
 
-        drawdown_percent = abs(min(0, daily_pnl)) / capital * 100
+        effective_capital = available_balance * (strategy.allocation_pct / 100)
+        if effective_capital <= 0:
+            return False
+
+        drawdown_percent = abs(min(0, float(daily_pnl))) / effective_capital * 100
 
         # Use daily_loss_cap if set, otherwise fall back to max_drawdown_percent
         effective_cap = strategy.daily_loss_cap_percent or strategy.max_drawdown_percent

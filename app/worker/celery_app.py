@@ -59,7 +59,7 @@ celery_app.conf.update(
     task_routes={
         "app.worker.tasks.run_analysis_pipeline": {"queue": "analysis"},
         "app.worker.tasks.fetch_market_data": {"queue": "analysis"},
-        "app.worker.tasks.generate_signals_for_strategy": {"queue": "signals"},
+        "app.worker.tasks.generate_signals": {"queue": "signals"},
         "app.worker.tasks.execute_signal_task": {"queue": "execution"},
         "app.worker.tasks.expire_stale_signals": {"queue": "maintenance"},
         "app.worker.tasks.send_notification_email": {"queue": "notifications"},

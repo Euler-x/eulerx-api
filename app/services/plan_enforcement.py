@@ -11,7 +11,7 @@ Usage::
 
     # In a route handler:
     await PlanEnforcer.strategy_count(db, perms)
-    await PlanEnforcer.allocation(db, perms, data.capital_allocation)
+    await PlanEnforcer.allocation(db, perms, data.allocation_pct)
     PlanEnforcer.ate_access(perms)
     PlanEnforcer.feature(perms, "api_access")
 """
@@ -44,7 +44,7 @@ class PlanEnforcer:
     Every method is a ``@staticmethod`` — callers never need to instantiate::
 
         await PlanEnforcer.strategy_count(db, perms)
-        await PlanEnforcer.allocation(db, perms, 5000.0)
+        await PlanEnforcer.allocation(db, perms, 50.0)
         PlanEnforcer.ate_access(perms)
         PlanEnforcer.feature(perms, "priority_support")
         await PlanEnforcer.trial_eligibility(db, perms.id, plan.id)
@@ -76,45 +76,31 @@ class PlanEnforcer:
                 "Upgrade your plan to create more."
             )
 
-    # ── Capital allocation ──────────────────────────────────────────────────
+    # ── Allocation percentage ────────────────────────────────────────────────
 
     @staticmethod
     async def allocation(
         db: AsyncSession,
         perms: UserPermissions,
-        new_allocation: float,
+        new_allocation_pct: float,
         *,
         exclude_strategy_id: str | _uuid.UUID | None = None,
     ) -> None:
-        """Raise 403 if *new_allocation* would breach the plan's ``max_allocation``.
+        """Raise 403 if *new_allocation_pct* would breach the cumulative 100% limit.
 
-        Enforces two rules:
-
-        1. **Per-strategy cap** — a single strategy's allocation must not exceed
-           the plan limit on its own.
-        2. **Cumulative cap** — the sum of all the user's strategy allocations
-           (including the new one) must not exceed the plan limit.
+        Enforces that the sum of all the user's strategy allocation percentages
+        (including the new one) does not exceed 100%.
 
         Pass *exclude_strategy_id* when updating an existing strategy so its
         current value is not double-counted in the cumulative sum.
 
-        No-ops when the user is not subscribed or when ``max_allocation = 0``
-        (unlimited).
+        No-ops when the user is not subscribed.
         """
-        if not perms.is_subscribed or perms.max_allocation <= 0:
+        if not perms.is_subscribed:
             return
 
-        cap = perms.max_allocation
-
-        # Rule 1 — single-strategy cap
-        if new_allocation > cap:
-            raise PlanLimitError(
-                f"A single strategy's capital allocation (${new_allocation:,.2f}) "
-                f"cannot exceed your {perms.plan_name!r} plan limit of ${cap:,.2f}."
-            )
-
-        # Rule 2 — cumulative cap across all active strategies
-        query = select(func.coalesce(func.sum(Strategy.capital_allocation), 0.0)).where(
+        # Cumulative cap: all strategy allocation_pct values must sum to ≤ 100%
+        query = select(func.coalesce(func.sum(Strategy.allocation_pct), 0.0)).where(
             Strategy.user_id == perms.id
         )
 
@@ -127,14 +113,13 @@ class PlanEnforcer:
             query = query.where(Strategy.id != excl)
 
         current_total: float = float((await db.execute(query)).scalar() or 0.0)
-        proposed_total = current_total + new_allocation
+        proposed_total = current_total + new_allocation_pct
 
-        if proposed_total > cap:
+        if proposed_total > 100.0:
             raise PlanLimitError(
-                f"Adding ${new_allocation:,.2f} would bring your total allocated "
-                f"capital to ${proposed_total:,.2f}, exceeding your "
-                f"{perms.plan_name!r} plan limit of ${cap:,.2f}. "
-                f"(Current total: ${current_total:,.2f})"
+                f"Adding {new_allocation_pct:.1f}% would bring your total allocation "
+                f"to {proposed_total:.1f}%, exceeding the 100% limit. "
+                f"(Current total: {current_total:.1f}%)"
             )
 
     # ── ATE access ──────────────────────────────────────────────────────────

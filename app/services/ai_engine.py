@@ -222,15 +222,11 @@ class AIEngineService:
             },
         }
 
-    async def _get_today_analyzed_symbols(
-        self, db: AsyncSession, strategy_id: str | None
-    ) -> set[str]:
+    async def _get_today_analyzed_symbols(self, db: AsyncSession) -> set[str]:
         """Return symbols that already have signals generated today."""
         now = utc_now()
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         query = select(Signal.symbol).where(Signal.created_at >= start_of_day)
-        if strategy_id:
-            query = query.where(Signal.strategy_id == strategy_id)
         result = await db.execute(query)
         return {row[0] for row in result.all()}
 
@@ -238,12 +234,16 @@ class AIEngineService:
         self,
         symbols: list[dict],
         db: AsyncSession,
-        strategy_id: str | None = None,
     ) -> list[Signal]:
+        """Analyze market symbols and generate strategy-independent signals.
+
+        Signal generation is purely about market analysis — no strategy context.
+        Strategies are only applied later during trade execution for risk management.
+        """
         generated_signals = []
 
         # Skip symbols already analyzed today (avoid duplicate analysis)
-        already_analyzed = await self._get_today_analyzed_symbols(db, strategy_id)
+        already_analyzed = await self._get_today_analyzed_symbols(db)
         if already_analyzed:
             logger.info(
                 "Skipping %d symbols already analyzed today: %s",
@@ -275,7 +275,6 @@ class AIEngineService:
                 continue
 
             signal = Signal(
-                strategy_id=strategy_id,
                 symbol=symbol,
                 direction=aggregated["direction"],
                 confidence=aggregated["confidence"],

@@ -2,7 +2,7 @@
 
 Covers every axis of plan enforcement:
   - Strategy count limits (per plan)
-  - Capital allocation limits: per-strategy cap and cumulative cap
+  - Allocation percentage limits: cumulative ≤ 100%
   - Allocation enforcement on strategy update
   - Unsubscribed users bypass enforcement (no-op guards)
   - Activation requires an active subscription
@@ -102,7 +102,7 @@ _BASE = {
     "name": "Test Strategy",
     "strategy_type": "conservative",
     "risk_profile": "low",
-    "capital_allocation": 100.0,
+    "allocation_pct": 10.0,
 }
 
 
@@ -145,94 +145,87 @@ async def test_strategy_count_zero_means_unlimited(client, setup_db):
         r = await client.post(
             "/api/v1/strategies",
             headers=hdrs,
-            json={**_BASE, "name": f"Unlimited-{i}", "capital_allocation": 10.0},
+            json={**_BASE, "name": f"Unlimited-{i}", "allocation_pct": 10.0},
         )
         assert r.status_code == 201, f"strategy {i} failed: {r.text}"
 
 
-# ── 2. Per-strategy allocation cap ──────────────────────────────────────────────
+# ── 2. Allocation percentage — schema validation ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_single_strategy_exceeds_allocation_cap(client, setup_db):
-    """A single strategy's allocation exceeding max_allocation is rejected."""
-    plan = await _plan("alloc-single", max_allocation=1_000.0)
+async def test_single_strategy_allocation_over_100_rejected(client, setup_db):
+    """A single strategy with allocation_pct > 100 is rejected by schema validation."""
+    plan = await _plan("alloc-single")
     hdrs = await _subscribed(plan)
 
     r = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "capital_allocation": 1_500.0},
+        json={**_BASE, "allocation_pct": 150.0},
     )
-    assert r.status_code == 403
-    detail = r.json()["detail"].lower()
-    assert "1,500" in detail or "exceed" in detail or "limit" in detail
+    assert r.status_code == 422  # Pydantic validation error (le=100.0)
 
 
 @pytest.mark.asyncio
-async def test_allocation_at_cap_is_allowed(client, setup_db):
-    """A strategy allocation exactly at the cap is accepted."""
-    plan = await _plan("alloc-exact", max_allocation=1_000.0)
+async def test_allocation_at_100_is_allowed(client, setup_db):
+    """A strategy allocation at exactly 100% is accepted."""
+    plan = await _plan("alloc-exact")
     hdrs = await _subscribed(plan)
 
     r = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "capital_allocation": 1_000.0},
+        json={**_BASE, "allocation_pct": 100.0},
     )
     assert r.status_code == 201
 
 
-# ── 3. Cumulative allocation cap ────────────────────────────────────────────────
+# ── 3. Cumulative allocation cap (100%) ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_cumulative_allocation_blocks_second_strategy(client, setup_db):
-    """Two strategies whose combined allocation exceeds the cap: second is blocked."""
-    plan = await _plan("alloc-cumul", max_allocation=1_000.0)
+    """Two strategies whose combined allocation exceeds 100%: second is blocked."""
+    plan = await _plan("alloc-cumul")
     hdrs = await _subscribed(plan)
 
-    # First: 600 — within cap
+    # First: 60% — within limit
     r1 = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "First", "capital_allocation": 600.0},
+        json={**_BASE, "name": "First", "allocation_pct": 60.0},
     )
     assert r1.status_code == 201
 
-    # Second: 600 — cumulative 1200 > 1000 → blocked
+    # Second: 60% — cumulative 120% > 100% → blocked
     r2 = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "Second", "capital_allocation": 600.0},
+        json={**_BASE, "name": "Second", "allocation_pct": 60.0},
     )
     assert r2.status_code == 403
     detail = r2.json()["detail"].lower()
-    assert (
-        "total" in detail
-        or "1,200" in detail
-        or "exceed" in detail
-        or "current total" in detail
-    )
+    assert "total" in detail or "100" in detail or "exceed" in detail
 
 
 @pytest.mark.asyncio
 async def test_cumulative_allocation_allows_exact_fill(client, setup_db):
-    """Two strategies that together reach exactly the cap are both accepted."""
-    plan = await _plan("alloc-exact-fill", max_allocation=1_000.0)
+    """Two strategies that together reach exactly 100% are both accepted."""
+    plan = await _plan("alloc-exact-fill")
     hdrs = await _subscribed(plan)
 
     r1 = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "Half-1", "capital_allocation": 500.0},
+        json={**_BASE, "name": "Half-1", "allocation_pct": 50.0},
     )
     assert r1.status_code == 201
 
     r2 = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "Half-2", "capital_allocation": 500.0},
+        json={**_BASE, "name": "Half-2", "allocation_pct": 50.0},
     )
     assert r2.status_code == 201
 
@@ -241,37 +234,46 @@ async def test_cumulative_allocation_allows_exact_fill(client, setup_db):
 
 
 @pytest.mark.asyncio
-async def test_update_allocation_blocked_above_cap(client, setup_db):
-    """Updating a strategy's allocation beyond the plan cap returns 403."""
-    plan = await _plan("alloc-upd-block", max_allocation=1_000.0)
+async def test_update_allocation_blocked_above_100(client, setup_db):
+    """Updating a strategy's allocation beyond 100% cumulative returns 403."""
+    plan = await _plan("alloc-upd-block")
     hdrs = await _subscribed(plan)
 
+    # Create two strategies: 50% + 30% = 80%
     r = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "Updatable", "capital_allocation": 500.0},
+        json={**_BASE, "name": "First", "allocation_pct": 50.0},
     )
     assert r.status_code == 201
-    sid = r.json()["id"]
 
-    r2 = await client.put(
+    r2 = await client.post(
+        "/api/v1/strategies",
+        headers=hdrs,
+        json={**_BASE, "name": "Second", "allocation_pct": 30.0},
+    )
+    assert r2.status_code == 201
+    sid = r2.json()["id"]
+
+    # Try updating second from 30% to 80% → cumulative 50+80=130% > 100% → blocked
+    r3 = await client.put(
         f"/api/v1/strategies/{sid}",
         headers=hdrs,
-        json={"capital_allocation": 1_500.0},
+        json={"allocation_pct": 80.0},
     )
-    assert r2.status_code == 403
+    assert r3.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_update_allocation_within_cap_succeeds(client, setup_db):
-    """Updating a strategy's allocation within the cap succeeds."""
-    plan = await _plan("alloc-upd-ok", max_allocation=1_000.0)
+    """Updating a strategy's allocation within the 100% cap succeeds."""
+    plan = await _plan("alloc-upd-ok")
     hdrs = await _subscribed(plan)
 
     r = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "Updatable OK", "capital_allocation": 400.0},
+        json={**_BASE, "name": "Updatable OK", "allocation_pct": 40.0},
     )
     assert r.status_code == 201
     sid = r.json()["id"]
@@ -279,32 +281,31 @@ async def test_update_allocation_within_cap_succeeds(client, setup_db):
     r2 = await client.put(
         f"/api/v1/strategies/{sid}",
         headers=hdrs,
-        json={"capital_allocation": 900.0},
+        json={"allocation_pct": 90.0},
     )
     assert r2.status_code == 200
-    # pytest.approx handles float comparison from Numeric column
-    assert float(r2.json()["capital_allocation"]) == pytest.approx(900.0, rel=1e-3)
+    assert float(r2.json()["allocation_pct"]) == pytest.approx(90.0, rel=1e-3)
 
 
 @pytest.mark.asyncio
 async def test_update_does_not_double_count_own_allocation(client, setup_db):
     """Updating the SAME strategy's allocation is not cumulative-counted twice."""
-    plan = await _plan("alloc-no-double", max_allocation=1_000.0)
+    plan = await _plan("alloc-no-double")
     hdrs = await _subscribed(plan)
 
     r = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "name": "No Double", "capital_allocation": 800.0},
+        json={**_BASE, "name": "No Double", "allocation_pct": 80.0},
     )
     assert r.status_code == 201
     sid = r.json()["id"]
 
-    # Updating from 800 to 900 — should be fine (not 800+900=1700 > 1000)
+    # Updating from 80% to 90% — should be fine (not 80+90=170% > 100%)
     r2 = await client.put(
         f"/api/v1/strategies/{sid}",
         headers=hdrs,
-        json={"capital_allocation": 900.0},
+        json={"allocation_pct": 90.0},
     )
     assert r2.status_code == 200
 
@@ -317,11 +318,11 @@ async def test_unsubscribed_user_bypasses_count_and_allocation_guards(client, se
     """PlanEnforcer no-ops when the user has no active subscription."""
     hdrs = await _unsubscribed()
 
-    # Even with a very large allocation — enforcement is skipped for non-subscribers
+    # Allocation enforcement is skipped for non-subscribers
     r = await client.post(
         "/api/v1/strategies",
         headers=hdrs,
-        json={**_BASE, "capital_allocation": 9_999_999.0},
+        json={**_BASE, "allocation_pct": 100.0},
     )
     assert r.status_code == 201
 

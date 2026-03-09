@@ -39,7 +39,7 @@ async def create_strategy(
     db: AsyncSession = Depends(get_db),
 ):
     await PlanEnforcer.strategy_count(db, perms)
-    await PlanEnforcer.allocation(db, perms, data.capital_allocation)
+    await PlanEnforcer.allocation(db, perms, data.allocation_pct)
 
     strategy = Strategy(
         user_id=perms.id,
@@ -48,7 +48,7 @@ async def create_strategy(
         risk_profile=data.risk_profile,
         leverage_limit=data.leverage_limit,
         max_positions=data.max_positions,
-        capital_allocation=data.capital_allocation,
+        allocation_pct=data.allocation_pct,
         max_drawdown_percent=data.max_drawdown_percent,
         daily_loss_cap_percent=data.daily_loss_cap_percent,
         target_volatility=data.target_volatility,
@@ -98,13 +98,13 @@ async def update_strategy(
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
 
-    # If capital_allocation is being changed, re-validate against plan limits,
+    # If allocation_pct is being changed, re-validate against cumulative limit,
     # excluding this strategy's current value from the cumulative sum.
-    if data.capital_allocation is not None:
+    if data.allocation_pct is not None:
         await PlanEnforcer.allocation(
             db,
             perms,
-            data.capital_allocation,
+            data.allocation_pct,
             exclude_strategy_id=strategy_id,
         )
 

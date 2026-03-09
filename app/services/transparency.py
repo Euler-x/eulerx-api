@@ -42,13 +42,16 @@ class TransparencyService:
         # Total on-chain balance = perps + spot
         on_chain_balance = perps_balance + spot_balance
 
-        total_allocated = sum(float(s.capital_allocation) for s in strategies)
+        # Total allocated = sum of each strategy's percentage of the on-chain balance
+        total_allocation_pct = sum(s.allocation_pct for s in strategies)
+        total_allocated = on_chain_balance * (total_allocation_pct / 100)
 
         return {
             "on_chain_balance": round(on_chain_balance, 2),
             "perps_balance": round(perps_balance, 2),
             "spot_balance": round(spot_balance, 2),
             "spot_balances": spot_balances,
+            "total_allocation_pct": round(total_allocation_pct, 1),
             "total_allocated": round(total_allocated, 2),
             "margin_used": round(margin_used, 2),
             "free_collateral": round(free_collateral, 2),
