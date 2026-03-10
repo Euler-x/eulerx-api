@@ -109,7 +109,7 @@ class Settings(BaseSettings):
 
     # ATE
     ate_max_executions_per_hour: int = 10
-    ate_confidence_threshold: float = 0.75
+    ate_confidence_threshold: float = 0.70
     ate_default_leverage: float = 1.0
     ate_max_drawdown_percent: float = 10.0
 

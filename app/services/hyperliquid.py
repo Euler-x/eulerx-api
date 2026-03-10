@@ -102,15 +102,20 @@ class HyperliquidService:
             return []
 
     async def enrich_with_candles(self, symbols: list[dict]) -> list[dict]:
-        """Add 24h candle summary to each symbol's market data."""
-        for sym in symbols:
+        """Add 24h candle summary to each symbol's market data.
+
+        Fetches candles for all symbols in parallel for speed.
+        """
+        import asyncio
+
+        async def _enrich_one(sym: dict) -> None:
             coin = sym.get("symbol", "")
             if not coin:
-                continue
+                return
             try:
                 candles = await self.get_candles(coin, interval="1h", hours=24)
                 if not candles:
-                    continue
+                    return
 
                 closes = [float(c["c"]) for c in candles]
                 opens = [float(c["o"]) for c in candles]
@@ -167,6 +172,7 @@ class HyperliquidService:
             except Exception as e:
                 logger.warning(f"Failed to fetch candles for {coin}: {e}")
 
+        await asyncio.gather(*[_enrich_one(sym) for sym in symbols])
         return symbols
 
     async def get_user_state(self, wallet_address: str) -> dict:

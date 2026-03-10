@@ -222,11 +222,17 @@ class AIEngineService:
             },
         }
 
-    async def _get_today_analyzed_symbols(self, db: AsyncSession) -> set[str]:
-        """Return symbols that already have signals generated today."""
+    async def _get_active_signal_symbols(self, db: AsyncSession) -> set[str]:
+        """Return symbols that still have an active (non-expired) signal.
+
+        Only skips symbols with a live signal — expired signals don't block
+        re-analysis, so each pipeline run can re-evaluate the market fresh.
+        """
         now = utc_now()
-        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        query = select(Signal.symbol).where(Signal.created_at >= start_of_day)
+        query = select(Signal.symbol).where(
+            Signal.status == SignalStatus.NEW,
+            Signal.expires_at > now,
+        )
         result = await db.execute(query)
         return {row[0] for row in result.all()}
 
@@ -242,30 +248,42 @@ class AIEngineService:
         """
         generated_signals = []
 
-        # Skip symbols already analyzed today (avoid duplicate analysis)
-        already_analyzed = await self._get_today_analyzed_symbols(db)
-        if already_analyzed:
+        # Only skip symbols that still have an active (non-expired) signal.
+        # Expired signals no longer block re-analysis.
+        active_symbols = await self._get_active_signal_symbols(db)
+        if active_symbols:
             logger.info(
-                "Skipping %d symbols already analyzed today: %s",
-                len(already_analyzed),
-                ", ".join(sorted(already_analyzed)),
+                "Skipping %d symbols with active signals: %s",
+                len(active_symbols),
+                ", ".join(sorted(active_symbols)),
             )
+
+        # Signal lifetime matches pipeline frequency so signals stay live
+        # until the next pipeline run can replace them.
+        signal_lifetime = timedelta(hours=settings.analysis_schedule_hours, minutes=15)
 
         for symbol_data in symbols:
             symbol = symbol_data.get("symbol", "")
             if not symbol:
                 continue
 
-            if symbol in already_analyzed:
+            if symbol in active_symbols:
                 continue
 
             model_responses = await self.query_all_models(symbol, symbol_data)
             aggregated = self.aggregate_signals(model_responses)
 
             if aggregated is None:
+                logger.info("No consensus for %s, skipping", symbol)
                 continue
 
             if aggregated["confidence"] < settings.ate_confidence_threshold:
+                logger.info(
+                    "Skipping %s: confidence %.2f below %.2f threshold",
+                    symbol,
+                    aggregated["confidence"],
+                    settings.ate_confidence_threshold,
+                )
                 continue
 
             # Require minimum 1.5:1 risk:reward ratio
@@ -284,7 +302,7 @@ class AIEngineService:
                 risk_reward_ratio=aggregated["risk_reward_ratio"],
                 indicators=aggregated["indicators"],
                 status=SignalStatus.NEW,
-                expires_at=utc_now() + timedelta(hours=1),
+                expires_at=utc_now() + signal_lifetime,
                 model_responses=aggregated["model_responses"],
             )
 
