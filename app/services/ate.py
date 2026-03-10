@@ -523,13 +523,13 @@ class ATEService:
         return False
 
     async def monitor_positions(self, db: AsyncSession) -> list[dict]:
-        """Monitor open positions for TP/SL hits.
+        """Reconcile open executions with actual HyperLiquid position state.
 
-        Queries all FILLED executions without an exit_price, compares
-        current market prices against the signal's take_profit/stop_loss
-        levels, and closes positions that have been triggered.
+        For each FILLED execution in our DB, checks whether the position still
+        exists on HyperLiquid. If it's gone (closed by native TP/SL or manually),
+        looks up the closing fill to get the real exit price and updates the DB.
 
-        Returns a list of result dicts for each closed position.
+        Returns a list of result dicts for each reconciled/closed position.
         """
         # Load all open executions with their signals, strategies, and users
         result = await db.execute(
@@ -549,95 +549,106 @@ class ATEService:
         if not open_executions:
             return []
 
-        # Batch-fetch current prices
-        try:
-            all_mids = await self.hyperliquid.get_all_mids()
-        except Exception as e:
-            logger.error("Failed to fetch market prices for TP/SL monitoring: %s", e)
-            return []
+        # Group executions by user wallet address
+        by_wallet: dict[str, list[Execution]] = {}
+        for execution in open_executions:
+            user = execution.user
+            if not user or not user.wallet_address:
+                continue
+            by_wallet.setdefault(user.wallet_address, []).append(execution)
 
         closed = []
         notification_service = NotificationService()
 
-        for execution in open_executions:
-            signal = execution.signal
-            user = execution.user
-            strategy = execution.strategy
+        for wallet_address, executions in by_wallet.items():
+            # Fetch actual HL positions for this user
+            hl_positions = await self.hyperliquid.get_user_positions(wallet_address)
 
-            if not signal or not user:
-                continue
+            # Fetch recent fills to find exit data for closed positions
+            fills = await self.hyperliquid.get_user_fills(wallet_address)
 
-            symbol = signal.symbol
-            mid_str = all_mids.get(symbol)
-            if not mid_str:
-                continue
+            for execution in executions:
+                signal = execution.signal
+                user = execution.user
+                strategy = execution.strategy
 
-            current_price = float(mid_str)
-            tp_price = float(signal.take_profit) if signal.take_profit else None
-            sl_price = float(signal.stop_loss) if signal.stop_loss else None
-            entry_price = float(execution.entry_price)
-            is_buy = execution.direction == SignalDirection.BUY
+                if not signal or not user:
+                    continue
 
-            # Determine if TP or SL has been hit
-            triggered = None
-            if tp_price:
-                if (is_buy and current_price >= tp_price) or (
-                    not is_buy and current_price <= tp_price
-                ):
-                    triggered = "take_profit"
-            if sl_price and triggered is None:
-                if (is_buy and current_price <= sl_price) or (
-                    not is_buy and current_price >= sl_price
-                ):
-                    triggered = "stop_loss"
+                symbol = signal.symbol
+                entry_price = float(execution.entry_price)
+                quantity = float(execution.quantity)
+                is_buy = execution.direction == SignalDirection.BUY
 
-            if triggered is None:
-                continue
+                # Check if position still exists on HL
+                hl_pos = hl_positions.get(symbol)
+                if hl_pos is not None:
+                    # Position still open on HL — skip
+                    continue
 
-            # Close position
-            private_key = None
-            if user.encrypted_private_key:
-                try:
-                    private_key = decrypt_private_key(user.encrypted_private_key)
-                except ValueError:
-                    logger.error(
-                        "Failed to decrypt key for user %s during TP/SL close", user.id
+                # Position is gone on HL — find the closing fill
+                exit_price = None
+                close_hash = None
+                triggered = None
+
+                # Look for the closing fill (opposite side from our entry)
+                close_side = "A" if is_buy else "B"  # A=sell, B=buy
+                entry_time_ms = (
+                    int(execution.executed_at.timestamp() * 1000)
+                    if execution.executed_at
+                    else 0
+                )
+
+                for fill in reversed(fills):
+                    if (
+                        fill.get("coin") == symbol
+                        and fill.get("side") == close_side
+                        and fill.get("time", 0) > entry_time_ms
+                    ):
+                        exit_price = float(fill.get("px", 0))
+                        close_hash = fill.get("hash")
+                        closed_pnl = float(fill.get("closedPnl", 0))
+                        break
+
+                if exit_price is None:
+                    # No closing fill found yet — might still be pending
+                    logger.debug(
+                        "No closing fill found for %s %s (exec %s)",
+                        symbol,
+                        execution.id,
+                        wallet_address,
                     )
                     continue
 
-            if not private_key:
-                logger.warning(
-                    "No private key for user %s, cannot close position %s",
-                    user.id,
-                    execution.id,
-                )
-                continue
-
-            # Determine account_address for agent wallet mode
-            from app.models.enums import WalletType
-
-            account_address = (
-                user.wallet_address
-                if user.wallet_type == WalletType.CONNECTED
-                else None
-            )
-
-            close_result = await self.hyperliquid.close_position(
-                wallet_private_key=private_key,
-                symbol=symbol,
-                size=float(execution.quantity),
-                is_buy=is_buy,
-                account_address=account_address,
-            )
-
-            if close_result.get("success"):
-                execution.exit_price = current_price
-                quantity = float(execution.quantity)
-                if is_buy:
-                    execution.pnl = (current_price - entry_price) * quantity
+                # Calculate PnL from actual fill data
+                if closed_pnl:
+                    execution.pnl = closed_pnl
+                elif is_buy:
+                    execution.pnl = (exit_price - entry_price) * quantity
                 else:
-                    execution.pnl = (entry_price - current_price) * quantity
+                    execution.pnl = (entry_price - exit_price) * quantity
+
+                execution.exit_price = exit_price
                 execution.status = ExecutionStatus.CLOSED
+                if close_hash:
+                    execution.tx_hash = close_hash
+
+                # Determine if it was TP or SL
+                tp_price = float(signal.take_profit) if signal.take_profit else None
+                sl_price = float(signal.stop_loss) if signal.stop_loss else None
+
+                if tp_price and (
+                    (is_buy and exit_price >= tp_price * 0.99)
+                    or (not is_buy and exit_price <= tp_price * 1.01)
+                ):
+                    triggered = "take_profit"
+                elif sl_price and (
+                    (is_buy and exit_price <= sl_price * 1.01)
+                    or (not is_buy and exit_price >= sl_price * 0.99)
+                ):
+                    triggered = "stop_loss"
+                else:
+                    triggered = "closed"
 
                 pnl_str = f"{float(execution.pnl):+.4f}"
                 strategy_name = strategy.name if strategy else "Unknown"
@@ -650,17 +661,17 @@ class ATEService:
                             symbol=symbol,
                             direction=execution.direction.value,
                             entry_price=str(entry_price),
-                            exit_price=str(current_price),
+                            exit_price=str(exit_price),
                             pnl=pnl_str,
                             strategy_name=strategy_name,
                         )
-                    else:
+                    elif triggered == "stop_loss":
                         await notification_service.send_stop_loss_hit(
                             user=user,
                             symbol=symbol,
                             direction=execution.direction.value,
                             entry_price=str(entry_price),
-                            exit_price=str(current_price),
+                            exit_price=str(exit_price),
                             pnl=pnl_str,
                             strategy_name=strategy_name,
                         )
@@ -673,29 +684,20 @@ class ATEService:
                         "symbol": symbol,
                         "triggered": triggered,
                         "entry_price": entry_price,
-                        "exit_price": current_price,
+                        "exit_price": exit_price,
                         "pnl": float(execution.pnl),
+                        "tx_hash": close_hash,
                     }
                 )
 
                 logger.info(
-                    "%s hit for %s: entry=%.4f exit=%.4f pnl=%s",
+                    "%s for %s: entry=%.4f exit=%.4f pnl=%s (user %s)",
                     triggered.upper().replace("_", " "),
                     symbol,
                     entry_price,
-                    current_price,
+                    exit_price,
                     pnl_str,
-                )
-            else:
-                close_error = close_result.get("error", "unknown")
-                execution.error_message = (
-                    f"Failed to close on {triggered}: {close_error}"[:500]
-                )
-                logger.error(
-                    "Failed to close position %s for %s: %s",
-                    execution.id,
-                    triggered,
-                    close_error,
+                    user.id,
                 )
 
         if closed:

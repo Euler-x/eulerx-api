@@ -40,6 +40,37 @@ class HyperliquidService:
             logger.warning("Failed to look up tx hash for oid %s: %s", oid, e)
         return None
 
+    async def get_user_fills(self, wallet_address: str, limit: int = 200) -> list[dict]:
+        """Fetch recent fills for a user."""
+        try:
+            data = await self._post(
+                "/info",
+                {"type": "userFills", "user": wallet_address},
+            )
+            return data[-limit:] if len(data) > limit else data
+        except Exception as e:
+            logger.error("Failed to fetch user fills for %s: %s", wallet_address, e)
+            return []
+
+    async def get_user_positions(self, wallet_address: str) -> dict[str, dict]:
+        """Return {symbol: position_info} for non-zero positions."""
+        try:
+            state = await self.get_user_state(wallet_address)
+            positions = {}
+            for p in state.get("assetPositions", []):
+                pos = p.get("position", {})
+                sz = float(pos.get("szi", 0))
+                if sz != 0:
+                    positions[pos.get("coin", "")] = {
+                        "size": sz,
+                        "entry_px": float(pos.get("entryPx", 0)),
+                        "unrealized_pnl": float(pos.get("unrealizedPnl", 0)),
+                    }
+            return positions
+        except Exception as e:
+            logger.error("Failed to fetch positions for %s: %s", wallet_address, e)
+            return {}
+
     async def get_all_mids(self) -> dict[str, str]:
         data = await self._post("/info", {"type": "allMids"})
         return data
