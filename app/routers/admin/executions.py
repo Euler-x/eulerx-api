@@ -1,13 +1,16 @@
-"""Admin executions router — read-only cross-user access to all executions."""
+"""Admin executions router — cross-user access to all executions + manual trigger."""
 
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
+from app.middleware.audit import log_audit
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.enums import ExecutionStatus, SignalDirection
 from app.models.execution import Execution
 from app.models.schemas.common import PaginatedResponse
@@ -65,4 +68,91 @@ async def admin_get_execution(
     execution = result.scalar_one_or_none()
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")
+    return ExecutionResponse.model_validate(execution)
+
+
+# ── Manual execution trigger ────────────────────────────────────────
+
+
+class ManualExecuteRequest(BaseModel):
+    signal_id: uuid.UUID
+    user_email: str
+    strategy_id: Optional[uuid.UUID] = None
+
+
+@router.post("/executions/trigger", response_model=ExecutionResponse)
+async def admin_trigger_execution(
+    body: ManualExecuteRequest,
+    db: AsyncSession = Depends(get_db),
+    admin_perms: UserPermissions = RequireAdmin,
+):
+    """Manually execute a signal for a specific user (admin testing tool).
+
+    If strategy_id is omitted, uses the user's first active strategy.
+    """
+    from app.models.signal import Signal
+    from app.models.strategy import Strategy
+    from app.models.user import User
+    from app.services.ate import ATEService
+
+    # Load signal
+    sig_result = await db.execute(select(Signal).where(Signal.id == body.signal_id))
+    signal = sig_result.scalar_one_or_none()
+    if signal is None:
+        raise HTTPException(status_code=404, detail="Signal not found")
+
+    # Load user
+    user_result = await db.execute(select(User).where(User.email == body.user_email))
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Load strategy
+    if body.strategy_id:
+        strat_result = await db.execute(
+            select(Strategy).where(
+                Strategy.id == body.strategy_id,
+                Strategy.user_id == user.id,
+            )
+        )
+    else:
+        strat_result = await db.execute(
+            select(Strategy)
+            .where(Strategy.user_id == user.id, Strategy.is_active == True)  # noqa: E712
+            .order_by(Strategy.created_at.desc())
+            .limit(1)
+        )
+    strategy = strat_result.scalar_one_or_none()
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="No active strategy found for user")
+
+    # Execute
+    ate = ATEService()
+    execution = await ate.execute_signal(
+        db=db,
+        signal=signal,
+        strategy=strategy,
+        user=user,
+    )
+
+    if execution is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Execution skipped (rate limit or idempotency check)",
+        )
+
+    await log_audit(
+        db=db,
+        user_id=admin_perms.user.id,
+        action="MANUAL_EXECUTION_TRIGGER",
+        details={
+            "signal_id": str(signal.id),
+            "target_user": body.user_email,
+            "strategy_id": str(strategy.id),
+            "result_status": execution.status.value,
+            "error_message": execution.error_message,
+        },
+    )
+
+    await db.commit()
     return ExecutionResponse.model_validate(execution)

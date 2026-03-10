@@ -407,7 +407,7 @@ class ATEService:
         # Record rate limit
         ate_rate_limiter.record(rate_key)
 
-        # Log transaction
+        # Log transaction and place TP/SL
         if execution.status == ExecutionStatus.FILLED:
             await VerificationService.log_execution_transaction(
                 db=db,
@@ -415,6 +415,37 @@ class ATEService:
                 amount=quantity * entry_price,
                 asset=signal.symbol,
             )
+
+            # Place native TP/SL orders on HyperLiquid
+            tp_price = float(signal.take_profit) if signal.take_profit else None
+            sl_price = float(signal.stop_loss) if signal.stop_loss else None
+
+            if tp_price or sl_price:
+                try:
+                    tpsl_result = await self.hyperliquid.place_tp_sl_orders(
+                        wallet_private_key=private_key,
+                        symbol=signal.symbol,
+                        size=quantity,
+                        is_buy=is_buy,
+                        take_profit_price=tp_price,
+                        stop_loss_price=sl_price,
+                        account_address=account_address,
+                    )
+                    if tpsl_result.get("success"):
+                        logger.info(
+                            "TP/SL orders placed for %s: tp=$%s sl=$%s",
+                            signal.symbol,
+                            tp_price,
+                            sl_price,
+                        )
+                    else:
+                        logger.error(
+                            "Failed to place TP/SL for %s: %s",
+                            signal.symbol,
+                            tpsl_result.get("error"),
+                        )
+                except Exception as e:
+                    logger.error("Exception placing TP/SL for %s: %s", signal.symbol, e)
 
             # Send trade executed notification
             try:

@@ -22,6 +22,24 @@ class HyperliquidService:
             response.raise_for_status()
             return response.json()
 
+    async def _get_fill_tx_hash(self, user_address: str, oid: int) -> str | None:
+        """Look up the on-chain transaction hash for a filled order.
+
+        The HL SDK only returns an order ID (oid). The actual tx hash
+        is available from the userFills endpoint.
+        """
+        try:
+            fills = await self._post(
+                "/info",
+                {"type": "userFills", "user": user_address},
+            )
+            for fill in reversed(fills):
+                if fill.get("oid") == oid:
+                    return fill.get("hash")
+        except Exception as e:
+            logger.warning("Failed to look up tx hash for oid %s: %s", oid, e)
+        return None
+
     async def get_all_mids(self) -> dict[str, str]:
         data = await self._post("/info", {"type": "allMids"})
         return data
@@ -307,15 +325,15 @@ class HyperliquidService:
                 logger.error("HyperLiquid order error: %s", err_msg)
                 return {"success": False, "error": str(err_msg)}
 
-            # Extract tx hash from successful response
-            tx_hash = None
+            # Extract order ID from response
+            oid = None
             response = order_result.get("response", {})
             if isinstance(response, dict):
                 statuses = response.get("data", {}).get("statuses", [])
                 if statuses:
                     first = statuses[0]
                     if isinstance(first, dict):
-                        tx_hash = first.get("resting", {}).get("oid") or first.get(
+                        oid = first.get("resting", {}).get("oid") or first.get(
                             "filled", {}
                         ).get("oid")
                         if "error" in first:
@@ -331,10 +349,19 @@ class HyperliquidService:
                         logger.error("HyperLiquid order rejected: %s", first)
                         return {"success": False, "error": first}
 
+            # Look up the real on-chain tx hash from user fills
+            tx_hash = None
+            if oid and account_address:
+                tx_hash = await self._get_fill_tx_hash(account_address, oid)
+            elif oid:
+                signer_address = wallet.address
+                tx_hash = await self._get_fill_tx_hash(signer_address, oid)
+
             return {
                 "success": True,
                 "data": order_result,
                 "tx_hash": tx_hash,
+                "oid": oid,
             }
 
         except ImportError:
@@ -348,6 +375,115 @@ class HyperliquidService:
             }
         except Exception as e:
             logger.error(f"Order placement failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def place_tp_sl_orders(
+        self,
+        wallet_private_key: str,
+        symbol: str,
+        size: float,
+        is_buy: bool,
+        take_profit_price: float | None = None,
+        stop_loss_price: float | None = None,
+        account_address: str | None = None,
+    ) -> dict:
+        """Place native TP and SL trigger orders on HyperLiquid.
+
+        These are reduce-only orders that fire when the trigger price is hit.
+        For a BUY position: TP sells when price rises, SL sells when price drops.
+        For a SELL position: TP buys when price drops, SL buys when price rises.
+        """
+        try:
+            from eth_account import Account
+            from hyperliquid.exchange import Exchange
+            from hyperliquid.utils import constants
+
+            base_url = (
+                constants.TESTNET_API_URL
+                if self.is_testnet
+                else constants.MAINNET_API_URL
+            )
+
+            key = (
+                wallet_private_key
+                if wallet_private_key.startswith("0x")
+                else f"0x{wallet_private_key}"
+            )
+            wallet = Account.from_key(key)
+
+            exchange = Exchange(
+                wallet=wallet,
+                base_url=base_url,
+                account_address=account_address,
+            )
+
+            # TP/SL orders close the position (opposite direction, reduce_only)
+            close_is_buy = not is_buy
+            results = {"tp": None, "sl": None}
+
+            if take_profit_price:
+                try:
+                    tp_result = exchange.order(
+                        symbol,
+                        close_is_buy,
+                        size,
+                        take_profit_price,
+                        {
+                            "trigger": {
+                                "triggerPx": take_profit_price,
+                                "isMarket": True,
+                                "tpsl": "tp",
+                            }
+                        },
+                        reduce_only=True,
+                    )
+                    results["tp"] = tp_result
+                    logger.info(
+                        "TP order placed: %s %s size=%s trigger=$%s",
+                        "BUY" if close_is_buy else "SELL",
+                        symbol,
+                        size,
+                        take_profit_price,
+                    )
+                except Exception as e:
+                    logger.error("Failed to place TP order for %s: %s", symbol, e)
+                    results["tp"] = {"error": str(e)}
+
+            if stop_loss_price:
+                try:
+                    sl_result = exchange.order(
+                        symbol,
+                        close_is_buy,
+                        size,
+                        stop_loss_price,
+                        {
+                            "trigger": {
+                                "triggerPx": stop_loss_price,
+                                "isMarket": True,
+                                "tpsl": "sl",
+                            }
+                        },
+                        reduce_only=True,
+                    )
+                    results["sl"] = sl_result
+                    logger.info(
+                        "SL order placed: %s %s size=%s trigger=$%s",
+                        "BUY" if close_is_buy else "SELL",
+                        symbol,
+                        size,
+                        stop_loss_price,
+                    )
+                except Exception as e:
+                    logger.error("Failed to place SL order for %s: %s", symbol, e)
+                    results["sl"] = {"error": str(e)}
+
+            return {"success": True, "results": results}
+
+        except ImportError:
+            logger.warning("Hyperliquid SDK not configured for TP/SL orders")
+            return {"success": False, "error": "SDK not configured"}
+        except Exception as e:
+            logger.error("Failed to place TP/SL orders for %s: %s", symbol, e)
             return {"success": False, "error": str(e)}
 
     async def close_position(
