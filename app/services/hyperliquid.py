@@ -576,6 +576,13 @@ class HyperliquidService:
         These are reduce-only orders that fire when the trigger price is hit.
         For a BUY position: TP sells when price rises, SL sells when price drops.
         For a SELL position: TP buys when price drops, SL buys when price rises.
+
+        HyperLiquid trigger order params:
+        - triggerPx: the price at which the order activates
+        - isMarket: True = fill at market once triggered
+        - tpsl: "tp" or "sl" — tells HL which direction to watch
+        - price: for isMarket triggers, HL ignores this but requires a value;
+                 we pass the triggerPx as a placeholder
         """
         try:
             from eth_account import Account
@@ -604,71 +611,199 @@ class HyperliquidService:
             # TP/SL orders close the position (opposite direction, reduce_only)
             close_is_buy = not is_buy
             results = {"tp": None, "sl": None}
+            tp_ok = False
+            sl_ok = False
 
+            # Round trigger prices to 5 significant figures (HL requirement)
+            from math import floor, log10
+
+            def _round_price(p: float) -> float:
+                if p <= 0:
+                    return p
+                sig_figs = 5
+                magnitude = floor(log10(abs(p)))
+                return round(p, sig_figs - 1 - magnitude)
+
+            # ── Place Take Profit ──────────────────────────────────────
             if take_profit_price:
-                try:
-                    tp_result = exchange.order(
-                        symbol,
-                        close_is_buy,
-                        size,
-                        take_profit_price,
-                        {
-                            "trigger": {
-                                "triggerPx": take_profit_price,
-                                "isMarket": True,
-                                "tpsl": "tp",
-                            }
-                        },
-                        reduce_only=True,
-                    )
-                    results["tp"] = tp_result
-                    logger.info(
-                        "TP order placed: %s %s size=%s trigger=$%s",
-                        "BUY" if close_is_buy else "SELL",
-                        symbol,
-                        size,
-                        take_profit_price,
-                    )
-                except Exception as e:
-                    logger.error("Failed to place TP order for %s: %s", symbol, e)
-                    results["tp"] = {"error": str(e)}
+                tp_trigger = _round_price(take_profit_price)
+                for attempt in range(2):
+                    try:
+                        tp_result = exchange.order(
+                            symbol,
+                            close_is_buy,
+                            size,
+                            tp_trigger,
+                            {
+                                "trigger": {
+                                    "triggerPx": tp_trigger,
+                                    "isMarket": True,
+                                    "tpsl": "tp",
+                                }
+                            },
+                            reduce_only=True,
+                        )
 
+                        # Check for HL-level errors in the response
+                        tp_status = tp_result.get("status")
+                        if tp_status == "err":
+                            err = tp_result.get("response", "Unknown")
+                            logger.error(
+                                "TP order rejected by HL for %s (attempt %d): %s",
+                                symbol,
+                                attempt + 1,
+                                err,
+                            )
+                            results["tp"] = {"error": str(err)}
+                            continue
+
+                        # Check for per-order error in statuses
+                        statuses = (
+                            tp_result.get("response", {})
+                            .get("data", {})
+                            .get("statuses", [])
+                        )
+                        if (
+                            statuses
+                            and isinstance(statuses[0], dict)
+                            and "error" in statuses[0]
+                        ):
+                            err = statuses[0]["error"]
+                            logger.error(
+                                "TP order error for %s (attempt %d): %s",
+                                symbol,
+                                attempt + 1,
+                                err,
+                            )
+                            results["tp"] = {"error": str(err)}
+                            continue
+
+                        results["tp"] = tp_result
+                        tp_ok = True
+                        logger.info(
+                            "TP order placed: %s %s size=%s trigger=$%s",
+                            "BUY" if close_is_buy else "SELL",
+                            symbol,
+                            size,
+                            tp_trigger,
+                        )
+                        break
+                    except Exception as e:
+                        logger.error(
+                            "Failed to place TP order for %s (attempt %d): %s",
+                            symbol,
+                            attempt + 1,
+                            e,
+                        )
+                        results["tp"] = {"error": str(e)}
+
+            # ── Place Stop Loss ────────────────────────────────────────
             if stop_loss_price:
-                try:
-                    sl_result = exchange.order(
-                        symbol,
-                        close_is_buy,
-                        size,
-                        stop_loss_price,
-                        {
-                            "trigger": {
-                                "triggerPx": stop_loss_price,
-                                "isMarket": True,
-                                "tpsl": "sl",
-                            }
-                        },
-                        reduce_only=True,
-                    )
-                    results["sl"] = sl_result
-                    logger.info(
-                        "SL order placed: %s %s size=%s trigger=$%s",
-                        "BUY" if close_is_buy else "SELL",
-                        symbol,
-                        size,
-                        stop_loss_price,
-                    )
-                except Exception as e:
-                    logger.error("Failed to place SL order for %s: %s", symbol, e)
-                    results["sl"] = {"error": str(e)}
+                sl_trigger = _round_price(stop_loss_price)
+                for attempt in range(2):
+                    try:
+                        sl_result = exchange.order(
+                            symbol,
+                            close_is_buy,
+                            size,
+                            sl_trigger,
+                            {
+                                "trigger": {
+                                    "triggerPx": sl_trigger,
+                                    "isMarket": True,
+                                    "tpsl": "sl",
+                                }
+                            },
+                            reduce_only=True,
+                        )
 
-            return {"success": True, "results": results}
+                        sl_status = sl_result.get("status")
+                        if sl_status == "err":
+                            err = sl_result.get("response", "Unknown")
+                            logger.error(
+                                "SL order rejected by HL for %s (attempt %d): %s",
+                                symbol,
+                                attempt + 1,
+                                err,
+                            )
+                            results["sl"] = {"error": str(err)}
+                            continue
+
+                        statuses = (
+                            sl_result.get("response", {})
+                            .get("data", {})
+                            .get("statuses", [])
+                        )
+                        if (
+                            statuses
+                            and isinstance(statuses[0], dict)
+                            and "error" in statuses[0]
+                        ):
+                            err = statuses[0]["error"]
+                            logger.error(
+                                "SL order error for %s (attempt %d): %s",
+                                symbol,
+                                attempt + 1,
+                                err,
+                            )
+                            results["sl"] = {"error": str(err)}
+                            continue
+
+                        results["sl"] = sl_result
+                        sl_ok = True
+                        logger.info(
+                            "SL order placed: %s %s size=%s trigger=$%s",
+                            "BUY" if close_is_buy else "SELL",
+                            symbol,
+                            size,
+                            sl_trigger,
+                        )
+                        break
+                    except Exception as e:
+                        logger.error(
+                            "Failed to place SL order for %s (attempt %d): %s",
+                            symbol,
+                            attempt + 1,
+                            e,
+                        )
+                        results["sl"] = {"error": str(e)}
+
+            # Report granular success
+            tp_requested = take_profit_price is not None
+            sl_requested = stop_loss_price is not None
+            all_ok = (not tp_requested or tp_ok) and (not sl_requested or sl_ok)
+
+            if not all_ok:
+                logger.error(
+                    "TP/SL placement incomplete for %s: tp=%s sl=%s",
+                    symbol,
+                    "OK" if tp_ok else f"FAILED ({results.get('tp')})",
+                    "OK" if sl_ok else f"FAILED ({results.get('sl')})",
+                )
+
+            return {
+                "success": all_ok,
+                "tp_placed": tp_ok,
+                "sl_placed": sl_ok,
+                "results": results,
+            }
 
         except ImportError:
             logger.warning("Hyperliquid SDK not configured for TP/SL orders")
-            return {"success": False, "error": "SDK not configured"}
+            return {
+                "success": False,
+                "tp_placed": False,
+                "sl_placed": False,
+                "error": "SDK not configured",
+            }
         except Exception as e:
             logger.error("Failed to place TP/SL orders for %s: %s", symbol, e)
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "tp_placed": False,
+                "sl_placed": False,
+                "error": str(e),
+            }
 
     async def close_position(
         self,

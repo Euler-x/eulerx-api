@@ -458,7 +458,10 @@ class ATEService:
                         stop_loss_price=sl_price,
                         account_address=account_address,
                     )
-                    if tpsl_result.get("success"):
+                    tp_ok = tpsl_result.get("tp_placed", False)
+                    sl_ok = tpsl_result.get("sl_placed", False)
+
+                    if tp_ok and sl_ok:
                         logger.info(
                             "TP/SL orders placed for %s: tp=$%s sl=$%s",
                             signal.symbol,
@@ -466,11 +469,27 @@ class ATEService:
                             sl_price,
                         )
                     else:
-                        logger.error(
-                            "Failed to place TP/SL for %s: %s",
-                            signal.symbol,
-                            tpsl_result.get("error"),
-                        )
+                        if not tp_ok and tp_price:
+                            logger.error(
+                                "Failed to place TP order for %s at $%s: %s",
+                                signal.symbol,
+                                tp_price,
+                                tpsl_result.get("results", {}).get("tp", "unknown"),
+                            )
+                        if not sl_ok and sl_price:
+                            logger.error(
+                                "Failed to place SL order for %s at $%s: %s",
+                                signal.symbol,
+                                sl_price,
+                                tpsl_result.get("results", {}).get("sl", "unknown"),
+                            )
+                        if tp_ok or sl_ok:
+                            logger.warning(
+                                "Partial TP/SL for %s: tp_placed=%s sl_placed=%s",
+                                signal.symbol,
+                                tp_ok,
+                                sl_ok,
+                            )
                 except Exception as e:
                     logger.error("Exception placing TP/SL for %s: %s", signal.symbol, e)
 
