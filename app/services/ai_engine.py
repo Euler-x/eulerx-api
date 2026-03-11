@@ -16,13 +16,19 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-ANALYSIS_PROMPT_TEMPLATE = """You are an elite cryptocurrency perpetual futures trader on HyperLiquid focused on high-probability setups with strong risk-reward ratios.
+ANALYSIS_PROMPT_TEMPLATE = """You are a professional crypto perpetual futures trader on HyperLiquid. Your #1 priority is capital preservation — you only take trades with a clear structural edge.
 
 Symbol: {symbol}
 Current Price: ${price}
 
-24h Market Data:
+Market Data (1h candles, 24h):
 {candle_summary}
+
+Higher Timeframe Context:
+{htf_summary}
+
+Key Levels:
+{key_levels}
 
 Full Context: {context}
 
@@ -44,16 +50,44 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     }}
 }}
 
-Strict Rules — only signal BUY or SELL when ALL conditions are met:
-- Risk:reward ratio must be at least 2:1 (take_profit distance >= 2x stop_loss distance)
-- Stop loss: tight, 1-2% from entry (capital preservation is paramount)
-- Take profit: target 2-5% from entry
-- RSI must support direction: BUY only if RSI < 65, SELL only if RSI > 35
-- Volume must be normal or high (avoid low-volume setups)
-- Trend and momentum must align (no counter-trend trades)
-- Only signal with confidence >= 0.7 if the setup is genuinely strong
-- Signal HOLD if any condition above is not met — preserving capital beats forcing trades
-- Prefer setups near key support/resistance levels (24h high/low)
+MANDATORY RULES — you must follow ALL of these:
+
+1. HIGHER TIMEFRAME ALIGNMENT (most important):
+   - BUY only when 4h trend is "bullish" or "ranging" — NEVER buy into a bearish 4h trend
+   - SELL only when 4h trend is "bearish" or "ranging" — NEVER sell into a bullish 4h trend
+   - If the 4h trend contradicts the 1h signal, output HOLD
+
+2. STOP LOSS PLACEMENT (critical for survival):
+   - Place stop loss BEHIND the nearest key level (support for BUY, resistance for SELL)
+   - BUY stop loss must be BELOW the nearest support level — not at or above it
+   - SELL stop loss must be ABOVE the nearest resistance level — not at or below it
+   - Minimum SL distance: 1.5x the ATR (use ATR % provided) — this avoids wick-hunts
+   - If no clear support/resistance exists, use 2-3% from entry as SL
+   - NEVER use a stop loss tighter than 1.5% — crypto wicks will hunt it
+
+3. TAKE PROFIT:
+   - Risk:reward ratio must be at least 2.5:1 (TP distance >= 2.5x SL distance)
+   - Target the nearest resistance (for BUY) or support (for SELL) as first TP
+   - If the nearest level doesn't offer 2.5:1 R:R, signal HOLD
+
+4. ENTRY QUALITY:
+   - RSI must support direction: BUY only if RSI < 60, SELL only if RSI > 40
+   - 4h RSI should confirm: avoid BUY if 4h RSI > 70, avoid SELL if 4h RSI < 30
+   - Volume must be normal or high — avoid low-volume setups
+   - Price must be near a key level (within 1% of support for BUY, resistance for SELL)
+   - Avoid entering in the middle of a range — wait for level tests
+
+5. CONFIDENCE SCORING:
+   - 0.85+: Strong multi-timeframe alignment, clear level, volume surge
+   - 0.75-0.84: Good setup but one minor concern
+   - 0.70-0.74: Marginal — only with very clear structure
+   - Below 0.70: Signal HOLD regardless
+
+6. DEFAULT TO HOLD:
+   - When in doubt, HOLD. Missed trades cost nothing, bad trades cost capital
+   - If price is mid-range with no clear level test, HOLD
+   - If 1h and 4h trends conflict, HOLD
+   - If volatility is extreme (ATR > 5%), HOLD — conditions are too choppy
 """
 
 
@@ -78,17 +112,40 @@ class AIEngineService:
                 f"- 24h Low: ${candle.get('low_24h', 'N/A')}\n"
                 f"- 24h Volume: {candle.get('total_volume_24h', 'N/A')}\n"
                 f"- Avg Hourly Volume: {candle.get('avg_hourly_volume', 'N/A')}\n"
-                f"- Volatility: {candle.get('volatility_pct', 'N/A')}%\n"
+                f"- Volatility (24h range): {candle.get('volatility_pct', 'N/A')}%\n"
+                f"- ATR (14-period, 1h): {candle.get('atr_14_pct', 'N/A')}%\n"
                 f"- Recent Trend (6h): {candle.get('recent_trend', 'N/A')}\n"
-                f"- RSI (14): {candle.get('rsi_14', 'N/A')}"
+                f"- RSI (14, 1h): {candle.get('rsi_14', 'N/A')}"
+            )
+
+            # Higher timeframe summary
+            htf_trend = candle.get("htf_trend_4h", "unknown")
+            htf_rsi = candle.get("htf_rsi_4h")
+            htf_lines = (
+                f"- 4h Trend (market structure): {htf_trend}\n"
+                f"- 4h RSI: {htf_rsi if htf_rsi is not None else 'N/A'}"
+            )
+
+            # Key levels
+            support = candle.get("nearest_support")
+            resistance = candle.get("nearest_resistance")
+            level_lines = (
+                f"- Nearest Support: ${support if support else 'none identified'}\n"
+                f"- Nearest Resistance: ${resistance if resistance else 'none identified'}\n"
+                f"- 24h Low (floor): ${candle.get('low_24h', 'N/A')}\n"
+                f"- 24h High (ceiling): ${candle.get('high_24h', 'N/A')}"
             )
         else:
             candle_lines = "No candle data available"
+            htf_lines = "No higher timeframe data available"
+            level_lines = "No key levels identified"
 
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
             symbol=symbol,
             price=market_data.get("mid_price", "N/A"),
             candle_summary=candle_lines,
+            htf_summary=htf_lines,
+            key_levels=level_lines,
             context=json.dumps(market_data, default=str),
         )
 
@@ -286,11 +343,25 @@ class AIEngineService:
                 )
                 continue
 
-            # Require minimum 1.5:1 risk:reward ratio
+            # Require minimum 2:1 risk:reward ratio
             rr = aggregated.get("risk_reward_ratio", 0)
-            if rr and rr < 1.5:
-                logger.info("Skipping %s: R:R ratio %.2f below 1.5 minimum", symbol, rr)
+            if rr and rr < 2.0:
+                logger.info("Skipping %s: R:R ratio %.2f below 2.0 minimum", symbol, rr)
                 continue
+
+            # Reject signals with stop loss too tight (< 1.5% from entry)
+            entry = aggregated["entry_price"]
+            sl = aggregated["stop_loss"]
+            if entry > 0 and sl > 0:
+                sl_distance_pct = abs(entry - sl) / entry * 100
+                if sl_distance_pct < 1.5:
+                    logger.info(
+                        "Skipping %s: SL too tight (%.2f%% from entry), "
+                        "minimum 1.5%% required",
+                        symbol,
+                        sl_distance_pct,
+                    )
+                    continue
 
             signal = Signal(
                 symbol=symbol,

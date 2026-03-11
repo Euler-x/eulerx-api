@@ -219,12 +219,24 @@ def mock_hyperliquid_api():
             "app.services.hyperliquid.HyperliquidService.close_position",
             new_callable=AsyncMock,
         ) as mock_close,
+        patch(
+            "app.services.hyperliquid.HyperliquidService.get_user_positions",
+            new_callable=AsyncMock,
+        ) as mock_positions,
+        patch(
+            "app.services.hyperliquid.HyperliquidService.get_user_fills",
+            new_callable=AsyncMock,
+        ) as mock_fills,
     ):
         mock_mids.return_value = {"BTC": "50000.0", "ETH": "3000.0", "SOL": "150.0"}
         mock_order.return_value = {"success": True, "tx_hash": "0x" + "a" * 64}
         mock_close.return_value = {"success": True, "tx_hash": "0x" + "b" * 64}
+        mock_positions.return_value = {}
+        mock_fills.return_value = []
         yield {
             "get_all_mids": mock_mids,
             "place_order": mock_order,
             "close_position": mock_close,
+            "get_user_positions": mock_positions,
+            "get_user_fills": mock_fills,
         }

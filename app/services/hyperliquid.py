@@ -153,7 +153,8 @@ class HyperliquidService:
     async def enrich_with_candles(self, symbols: list[dict]) -> list[dict]:
         """Add 24h candle summary to each symbol's market data.
 
-        Fetches candles for all symbols in parallel for speed.
+        Fetches 1h candles (24h) and 4h candles (72h) for each symbol to
+        provide both short-term and medium-term context to the AI engine.
         """
         import asyncio
 
@@ -162,15 +163,20 @@ class HyperliquidService:
             if not coin:
                 return
             try:
-                candles = await self.get_candles(coin, interval="1h", hours=24)
-                if not candles:
+                # Fetch both 1h (24h) and 4h (72h) candles
+                candles_1h, candles_4h = await asyncio.gather(
+                    self.get_candles(coin, interval="1h", hours=24),
+                    self.get_candles(coin, interval="4h", hours=72),
+                )
+
+                if not candles_1h:
                     return
 
-                closes = [float(c["c"]) for c in candles]
-                opens = [float(c["o"]) for c in candles]
-                highs = [float(c["h"]) for c in candles]
-                lows = [float(c["l"]) for c in candles]
-                volumes = [float(c["v"]) for c in candles]
+                closes = [float(c["c"]) for c in candles_1h]
+                opens = [float(c["o"]) for c in candles_1h]
+                highs = [float(c["h"]) for c in candles_1h]
+                lows = [float(c["l"]) for c in candles_1h]
+                volumes = [float(c["v"]) for c in candles_1h]
 
                 high_24h = max(highs)
                 low_24h = min(lows)
@@ -183,7 +189,7 @@ class HyperliquidService:
                 # Simple volatility: (high - low) / mid as percentage
                 volatility = ((high_24h - low_24h) / close_latest) * 100
 
-                # Recent trend: last 6 candles
+                # Recent trend: last 6 candles (1h)
                 recent_closes = closes[-6:]
                 trend_up = sum(
                     1
@@ -194,7 +200,7 @@ class HyperliquidService:
                     "up" if trend_up >= 4 else "down" if trend_up <= 1 else "mixed"
                 )
 
-                # Rough RSI approximation (14-period if available)
+                # RSI (14-period)
                 rsi_period = min(14, len(closes) - 1)
                 gains, losses = [], []
                 for i in range(len(closes) - rsi_period, len(closes)):
@@ -206,6 +212,97 @@ class HyperliquidService:
                 rs = avg_gain / avg_loss if avg_loss > 0 else 100
                 rsi = 100 - (100 / (1 + rs))
 
+                # ── Support / Resistance from swing highs/lows ──────────
+                def _find_key_levels(h: list, lo: list, c: list) -> dict:
+                    """Identify support/resistance from swing points."""
+                    swing_highs = []
+                    swing_lows = []
+                    for i in range(1, len(h) - 1):
+                        if h[i] > h[i - 1] and h[i] > h[i + 1]:
+                            swing_highs.append(h[i])
+                        if lo[i] < lo[i - 1] and lo[i] < lo[i + 1]:
+                            swing_lows.append(lo[i])
+
+                    price = c[-1] if c else 0
+
+                    # Nearest resistance: lowest swing high above current price
+                    resistances = sorted([s for s in swing_highs if s > price])
+                    nearest_resistance = resistances[0] if resistances else None
+
+                    # Nearest support: highest swing low below current price
+                    supports = sorted(
+                        [s for s in swing_lows if s < price], reverse=True
+                    )
+                    nearest_support = supports[0] if supports else None
+
+                    return {
+                        "nearest_support": round(nearest_support, 4)
+                        if nearest_support
+                        else None,
+                        "nearest_resistance": round(nearest_resistance, 4)
+                        if nearest_resistance
+                        else None,
+                    }
+
+                key_levels = _find_key_levels(highs, lows, closes)
+
+                # ── Higher timeframe trend from 4h candles ──────────────
+                htf_trend = "unknown"
+                htf_rsi = None
+                if candles_4h and len(candles_4h) >= 6:
+                    htf_closes = [float(c["c"]) for c in candles_4h]
+                    htf_highs = [float(c["h"]) for c in candles_4h]
+                    htf_lows = [float(c["l"]) for c in candles_4h]
+
+                    # Market structure: higher highs + higher lows = bullish
+                    recent_htf_highs = htf_highs[-6:]
+                    recent_htf_lows = htf_lows[-6:]
+                    hh = sum(
+                        1
+                        for i in range(1, len(recent_htf_highs))
+                        if recent_htf_highs[i] > recent_htf_highs[i - 1]
+                    )
+                    hl = sum(
+                        1
+                        for i in range(1, len(recent_htf_lows))
+                        if recent_htf_lows[i] > recent_htf_lows[i - 1]
+                    )
+                    if hh >= 3 and hl >= 3:
+                        htf_trend = "bullish"
+                    elif hh <= 1 and hl <= 1:
+                        htf_trend = "bearish"
+                    else:
+                        htf_trend = "ranging"
+
+                    # 4h RSI
+                    rsi_p = min(14, len(htf_closes) - 1)
+                    if rsi_p >= 2:
+                        g2, l2 = [], []
+                        for i in range(len(htf_closes) - rsi_p, len(htf_closes)):
+                            d = htf_closes[i] - htf_closes[i - 1]
+                            g2.append(max(d, 0))
+                            l2.append(max(-d, 0))
+                        ag2 = sum(g2) / len(g2) if g2 else 0
+                        al2 = sum(l2) / len(l2) if l2 else 1
+                        rs2 = ag2 / al2 if al2 > 0 else 100
+                        htf_rsi = round(100 - (100 / (1 + rs2)), 1)
+
+                # ── Average True Range (ATR) for volatility-based SL ────
+                atr_values = []
+                for i in range(1, len(candles_1h)):
+                    tr = max(
+                        highs[i] - lows[i],
+                        abs(highs[i] - closes[i - 1]),
+                        abs(lows[i] - closes[i - 1]),
+                    )
+                    atr_values.append(tr)
+                atr_14 = (
+                    sum(atr_values[-14:]) / min(14, len(atr_values))
+                    if atr_values
+                    else 0
+                )
+                atr_pct = (atr_14 / close_latest * 100) if close_latest > 0 else 0
+
                 sym["candle_summary"] = {
                     "high_24h": round(high_24h, 4),
                     "low_24h": round(low_24h, 4),
@@ -216,7 +313,12 @@ class HyperliquidService:
                     "volatility_pct": round(volatility, 2),
                     "recent_trend": trend_direction,
                     "rsi_14": round(rsi, 1),
-                    "num_candles": len(candles),
+                    "atr_14_pct": round(atr_pct, 2),
+                    "nearest_support": key_levels["nearest_support"],
+                    "nearest_resistance": key_levels["nearest_resistance"],
+                    "htf_trend_4h": htf_trend,
+                    "htf_rsi_4h": htf_rsi,
+                    "num_candles": len(candles_1h),
                 }
             except Exception as e:
                 logger.warning(f"Failed to fetch candles for {coin}: {e}")
@@ -249,6 +351,57 @@ class HyperliquidService:
             },
         )
         return data
+
+    async def update_leverage(
+        self,
+        wallet_private_key: str,
+        symbol: str,
+        leverage: int,
+        account_address: str | None = None,
+        is_cross: bool = True,
+    ) -> dict:
+        """Set leverage for a symbol on HyperLiquid before placing an order.
+
+        Must be called before order placement to ensure the user's strategy
+        leverage is applied on-chain.
+        """
+        try:
+            from eth_account import Account
+            from hyperliquid.exchange import Exchange
+            from hyperliquid.utils import constants
+
+            base_url = (
+                constants.TESTNET_API_URL
+                if self.is_testnet
+                else constants.MAINNET_API_URL
+            )
+
+            key = (
+                wallet_private_key
+                if wallet_private_key.startswith("0x")
+                else f"0x{wallet_private_key}"
+            )
+            wallet = Account.from_key(key)
+
+            exchange = Exchange(
+                wallet=wallet,
+                base_url=base_url,
+                account_address=account_address,
+            )
+
+            result = exchange.update_leverage(leverage, symbol, is_cross=is_cross)
+            logger.info(
+                "Set leverage for %s to %dx (cross=%s, account=%s): %s",
+                symbol,
+                leverage,
+                is_cross,
+                account_address or "direct",
+                result,
+            )
+            return {"success": True, "result": result}
+        except Exception as e:
+            logger.error("Failed to set leverage for %s: %s", symbol, e)
+            return {"success": False, "error": str(e)}
 
     async def place_order(
         self,

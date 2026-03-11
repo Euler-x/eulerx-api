@@ -74,21 +74,27 @@ class ATEService:
 
         # allocation_pct is 1-100, representing percentage of wallet balance
         effective_capital = available_balance * (strategy.allocation_pct / 100)
-        leverage = min(strategy.leverage_limit, settings.ate_default_leverage)
+        # Use strategy's leverage — fall back to system default only if unset
+        leverage = strategy.leverage_limit or settings.ate_default_leverage
 
-        logger.info(
-            "Position sizing: allocation_pct=%.1f%%, wallet_balance=$%.2f, "
-            "effective=$%.2f",
-            strategy.allocation_pct,
-            available_balance,
-            effective_capital,
-        )
-
+        # Risk multiplier from strategy's risk_profile (user-configured)
         risk_multiplier = {
             "low": 0.02,
             "medium": 0.05,
             "high": 0.10,
         }.get(strategy.risk_profile.value, 0.02)
+
+        logger.info(
+            "Position sizing: strategy=%s, risk_profile=%s (multiplier=%.2f), "
+            "allocation=%.1f%%, leverage=%.1fx, wallet=$%.2f, effective=$%.2f",
+            strategy.name,
+            strategy.risk_profile.value,
+            risk_multiplier,
+            strategy.allocation_pct,
+            leverage,
+            available_balance,
+            effective_capital,
+        )
 
         position_value = effective_capital * risk_multiplier * leverage
         if entry_price <= 0:
@@ -186,7 +192,7 @@ class ATEService:
             direction=signal.direction,
             entry_price=entry_price or float(signal.entry_price),
             quantity=0,
-            leverage=min(strategy.leverage_limit, settings.ate_default_leverage),
+            leverage=strategy.leverage_limit or settings.ate_default_leverage,
             status=ExecutionStatus.FAILED,
             error_message=error_message[:500],
         )
@@ -332,7 +338,7 @@ class ATEService:
             direction=signal.direction,
             entry_price=entry_price,
             quantity=quantity,
-            leverage=min(strategy.leverage_limit, settings.ate_default_leverage),
+            leverage=strategy.leverage_limit or settings.ate_default_leverage,
             status=ExecutionStatus.PENDING,
         )
         db.add(execution)
@@ -356,16 +362,37 @@ class ATEService:
             user.wallet_address if user.wallet_type == WalletType.CONNECTED else None
         )
 
+        # Set leverage on HyperLiquid to match the strategy's setting
+        target_leverage = int(strategy.leverage_limit or settings.ate_default_leverage)
+        if target_leverage >= 1:
+            lev_result = await self.hyperliquid.update_leverage(
+                wallet_private_key=private_key,
+                symbol=signal.symbol,
+                leverage=target_leverage,
+                account_address=account_address,
+            )
+            if not lev_result.get("success"):
+                logger.warning(
+                    "Failed to set leverage to %dx for %s: %s — proceeding with current leverage",
+                    target_leverage,
+                    signal.symbol,
+                    lev_result.get("error"),
+                )
+
         logger.info(
             "Placing order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
-            "for user %s strategy %s [wallet_type=%s, account=%s]",
+            "leverage=%dx for user %s strategy %s [risk=%s, allocation=%.0f%%, "
+            "wallet_type=%s, account=%s]",
             "BUY" if is_buy else "SELL",
             signal.symbol,
             quantity,
             entry_price,
             notional,
+            target_leverage,
             user.id,
             strategy.id,
+            strategy.risk_profile.value,
+            strategy.allocation_pct,
             user.wallet_type.value if user.wallet_type else "none",
             account_address or "direct",
         )

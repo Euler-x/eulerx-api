@@ -413,6 +413,7 @@ async def test_monitor_open_positions_task(setup_db, mock_hyperliquid_api):
     async with TestSessionFactory() as session:
         user = User(
             id=user_id,
+            wallet_address="0x" + "a1" * 20,
             wallet_address_hash="s" * 64,
             wallet_type=WalletType.GENERATED,
             encrypted_private_key=encrypt_private_key("0x" + "d" * 64),
@@ -459,8 +460,19 @@ async def test_monitor_open_positions_task(setup_db, mock_hyperliquid_api):
         session.add(execution)
         await session.commit()
 
-    # Price above TP
-    mock_hyperliquid_api["get_all_mids"].return_value = {"ETH": "3600.0"}
+    # Position gone on HL (closed by native TP trigger)
+    mock_hyperliquid_api["get_user_positions"].return_value = {}
+    # Closing fill: sell (side "A") at 3600 with positive closedPnl
+    mock_hyperliquid_api["get_user_fills"].return_value = [
+        {
+            "coin": "ETH",
+            "side": "A",
+            "px": "3600",
+            "hash": "0x" + "c" * 64,
+            "closedPnl": "600",
+            "time": 1000,
+        }
+    ]
 
     with (
         patch(
@@ -659,11 +671,11 @@ def test_calculate_position_size():
     strategy.risk_profile.value = "medium"  # 5% risk multiplier
 
     # available_balance=20000, allocation_pct=50% → effective=10000
-    # 10000 * 0.05 * min(2.0, ate_default_leverage=1.0) / 50000 = 0.01
+    # 10000 * 0.05 * leverage_limit=2.0 / 50000 = 0.02
     size = ate.calculate_position_size(
         strategy, entry_price=50000.0, available_balance=20000.0
     )
-    assert size == 0.01
+    assert size == 0.02
 
 
 def test_calculate_position_size_no_balance():
