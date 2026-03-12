@@ -15,6 +15,8 @@ Sub-modules:
   - transactions.py  Transaction read-only views
   - ambassadors.py   Ambassador management
   - audit_logs.py    Audit log read-only views
+  - system.py        System health & pipeline status
+  - payments.py      Payment management
 """
 
 from fastapi import APIRouter, Depends
@@ -34,6 +36,8 @@ from app.routers.admin.strategies import router as strategies_router
 from app.routers.admin.transactions import router as transactions_router
 from app.routers.admin.ambassadors import router as ambassadors_router
 from app.routers.admin.audit_logs import router as audit_logs_router
+from app.routers.admin.system import router as system_router
+from app.routers.admin.payments import router as payments_router
 
 router = APIRouter(
     prefix="/admin",
@@ -55,3 +59,5 @@ router.include_router(strategies_router)
 router.include_router(transactions_router)
 router.include_router(ambassadors_router)
 router.include_router(audit_logs_router)
+router.include_router(system_router)
+router.include_router(payments_router)
