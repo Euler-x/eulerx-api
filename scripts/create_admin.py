@@ -8,8 +8,8 @@ from sqlalchemy import text
 from app.db.base import engine
 from app.utils.security import hash_password
 
-ADMIN_EMAIL = "eulerxadmin"
-ADMIN_PASSWORD = "PalmOil123"
+ADMIN_EMAIL = "admin@eulerx.io"
+ADMIN_PASSWORD = "QazWsx.123.!@#"
 
 
 async def main():

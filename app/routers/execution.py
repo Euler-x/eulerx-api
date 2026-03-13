@@ -33,6 +33,9 @@ async def list_executions(
     if status:
         query = query.where(Execution.status == status)
         count_query = count_query.where(Execution.status == status)
+    else:
+        query = query.where(Execution.status != ExecutionStatus.FAILED)
+        count_query = count_query.where(Execution.status != ExecutionStatus.FAILED)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
