@@ -101,11 +101,36 @@ class BillingCycle(str, enum.Enum):
 
 
 class AmbassadorRank(str, enum.Enum):
-    BRONZE = "bronze"
-    SILVER = "silver"
-    GOLD = "gold"
-    PLATINUM = "platinum"
-    DIAMOND = "diamond"
+    SCOUT = "scout"
+    GUIDE = "guide"
+    STRATEGIST = "strategist"
+    MASTER = "master"
+
+
+class TerritoryType(str, enum.Enum):
+    GEOGRAPHIC = "geographic"
+    DEMOGRAPHIC = "demographic"
+    PLATFORM = "platform"
+
+
+class CommissionStatus(str, enum.Enum):
+    PENDING = "pending"
+    PAID = "paid"
+
+
+class BonusType(str, enum.Enum):
+    CONVERSION = "conversion"
+    RETENTION = "retention"
+    MILESTONE = "milestone"
+    TIER_PROMOTION = "tier_promotion"
+    ANNUAL_RECOGNITION = "annual_recognition"
+
+
+class PayoutStatus(str, enum.Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    PAID = "paid"
+    FAILED = "failed"
 
 
 class TicketStatus(str, enum.Enum):

@@ -648,6 +648,78 @@ def monitor_open_positions() -> dict:
         raise
 
 
+# ── Ambassador Commission Task ────────────────────────────────────
+
+
+async def _calculate_ambassador_commissions_async() -> dict:
+    """Calculate commissions, bonuses, and tier promotions for all ambassadors."""
+    from app.models.ambassador import Ambassador
+    from app.models.ambassador_programs import AmbassadorTerritory
+    from app.services.ambassador import (
+        calculate_commission_for_month,
+        calculate_conversion_bonus,
+        check_milestone_bonuses,
+        check_and_promote_tier,
+        calculate_territory_commission,
+    )
+
+    now = utc_now()
+    if now.month == 1:
+        month, year = 12, now.year - 1
+    else:
+        month, year = now.month - 1, now.year
+
+    processed = 0
+    promoted = 0
+
+    async with async_session_factory() as session:
+        try:
+            result = await session.execute(select(Ambassador))
+            ambassadors = result.scalars().all()
+
+            for amb in ambassadors:
+                await calculate_commission_for_month(amb, month, year, session)
+                await calculate_conversion_bonus(amb, month, year, session)
+                await check_milestone_bonuses(amb, session)
+                was_promoted = await check_and_promote_tier(amb, session)
+                if was_promoted:
+                    promoted += 1
+                processed += 1
+
+            # Territory commissions
+            terr_result = await session.execute(select(AmbassadorTerritory))
+            territories = terr_result.scalars().all()
+            for territory in territories:
+                await calculate_territory_commission(territory, month, year, session)
+
+            await session.commit()
+            logger.info(
+                "Ambassador commissions calculated: %d ambassadors, %d promoted",
+                processed,
+                promoted,
+            )
+            return {
+                "month": month,
+                "year": year,
+                "ambassadors_processed": processed,
+                "tier_promotions": promoted,
+            }
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@shared_task(
+    name="app.worker.tasks.calculate_ambassador_commissions",
+    soft_time_limit=600,
+    time_limit=660,
+    acks_late=True,
+)
+def calculate_ambassador_commissions() -> dict:
+    """Monthly: calculate commissions and bonuses for all ambassadors."""
+    return run_async(_calculate_ambassador_commissions_async())
+
+
 # ── Data Retention Cleanup Task ───────────────────────────────────
 
 

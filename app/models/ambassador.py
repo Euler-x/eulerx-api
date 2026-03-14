@@ -12,6 +12,13 @@ from app.models.enums import AmbassadorRank
 
 if TYPE_CHECKING:
     from app.models.user import User
+    from app.models.ambassador_programs import (
+        AmbassadorTerritory,
+        AmbassadorCommission,
+        AmbassadorBonus,
+        AmbassadorPayout,
+        AmbassadorTrainingCompletion,
+    )
 
 
 class Ambassador(Base, TimestampMixin):
@@ -30,7 +37,7 @@ class Ambassador(Base, TimestampMixin):
             name="ambassador_rank_enum",
             values_callable=lambda obj: [e.value for e in obj],
         ),
-        default=AmbassadorRank.BRONZE,
+        default=AmbassadorRank.SCOUT,
     )
     referral_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     referred_by: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -43,6 +50,12 @@ class Ambassador(Base, TimestampMixin):
     rewards_earned: Mapped[float] = mapped_column(
         Numeric(precision=18, scale=8), default=0.0
     )
+    payout_address: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    territory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(),
+        ForeignKey("ambassador_territories.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     user: Mapped["User"] = relationship(back_populates="ambassador")
     referrals: Mapped[list["Ambassador"]] = relationship(
@@ -53,4 +66,20 @@ class Ambassador(Base, TimestampMixin):
         back_populates="referrals",
         remote_side="Ambassador.id",
         foreign_keys="Ambassador.referred_by",
+    )
+    territory: Mapped[Optional["AmbassadorTerritory"]] = relationship(
+        back_populates="ambassadors",
+        foreign_keys="Ambassador.territory_id",
+    )
+    commissions: Mapped[list["AmbassadorCommission"]] = relationship(
+        back_populates="ambassador", cascade="all, delete-orphan"
+    )
+    bonuses: Mapped[list["AmbassadorBonus"]] = relationship(
+        back_populates="ambassador", cascade="all, delete-orphan"
+    )
+    payouts: Mapped[list["AmbassadorPayout"]] = relationship(
+        back_populates="ambassador", cascade="all, delete-orphan"
+    )
+    training_completions: Mapped[list["AmbassadorTrainingCompletion"]] = relationship(
+        back_populates="ambassador", cascade="all, delete-orphan"
     )
