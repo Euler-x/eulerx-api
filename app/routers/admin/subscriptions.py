@@ -99,6 +99,7 @@ async def admin_create_subscription(
         ip_address=request.client.host if request.client else None,
     )
 
+    await db.refresh(subscription, ["plan"])
     return SubscriptionResponse.model_validate(subscription)
 
 
@@ -143,6 +144,7 @@ async def admin_override_subscription(
         ip_address=request.client.host if request.client else None,
     )
 
+    await db.refresh(subscription, ["plan"])
     return SubscriptionResponse.model_validate(subscription)
 
 
