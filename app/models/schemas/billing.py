@@ -112,6 +112,7 @@ class SubscriptionResponse(BaseModel):
     nowpayments_invoice_id: Optional[str]
     invoice_url: Optional[str] = None
     plan: Optional[PlanResponse] = None
+    user_email: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

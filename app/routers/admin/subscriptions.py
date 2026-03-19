@@ -21,6 +21,14 @@ from app.models.user import User
 router = APIRouter()
 
 
+def _sub_response(sub: Subscription) -> SubscriptionResponse:
+    """Build a SubscriptionResponse with user_email from the loaded relationship."""
+    resp = SubscriptionResponse.model_validate(sub)
+    if sub.user is not None:
+        resp.user_email = sub.user.email
+    return resp
+
+
 @router.get("/subscriptions", response_model=PaginatedResponse)
 async def admin_list_subscriptions(
     page: int = Query(1, ge=1),
@@ -31,7 +39,7 @@ async def admin_list_subscriptions(
 ):
     query = (
         select(Subscription)
-        .options(selectinload(Subscription.plan))
+        .options(selectinload(Subscription.plan), selectinload(Subscription.user))
         .order_by(Subscription.created_at.desc())
     )
     count_query = select(func.count(Subscription.id))
@@ -49,7 +57,7 @@ async def admin_list_subscriptions(
     subscriptions = result.scalars().all()
 
     return PaginatedResponse(
-        items=[SubscriptionResponse.model_validate(s) for s in subscriptions],
+        items=[_sub_response(s) for s in subscriptions],
         total=total,
         page=page,
         page_size=page_size,
@@ -104,8 +112,8 @@ async def admin_create_subscription(
         ip_address=request.client.host if request.client else None,
     )
 
-    await db.refresh(subscription, ["plan"])
-    return SubscriptionResponse.model_validate(subscription)
+    await db.refresh(subscription, ["plan", "user"])
+    return _sub_response(subscription)
 
 
 @router.put("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
@@ -149,8 +157,8 @@ async def admin_override_subscription(
         ip_address=request.client.host if request.client else None,
     )
 
-    await db.refresh(subscription, ["plan"])
-    return SubscriptionResponse.model_validate(subscription)
+    await db.refresh(subscription, ["plan", "user"])
+    return _sub_response(subscription)
 
 
 @router.delete("/subscriptions/{subscription_id}", response_model=MessageResponse)
