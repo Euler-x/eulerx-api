@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
@@ -28,7 +29,11 @@ async def admin_list_subscriptions(
     user_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Subscription).order_by(Subscription.created_at.desc())
+    query = (
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .order_by(Subscription.created_at.desc())
+    )
     count_query = select(func.count(Subscription.id))
 
     if status_filter:
