@@ -118,22 +118,46 @@ class HyperliquidService:
         )
         return data
 
-    async def get_top_gainers(self, limit: int = 20) -> list[dict]:
-        """Fetch market data, enrich with 24h candles, and return the most
-        active symbols sorted by absolute price change * volume score.
+    async def get_meta_and_asset_ctxs(self) -> tuple[dict, list[dict]]:
+        """Fetch metaAndAssetCtxs for funding rates and open interest."""
+        data = await self._post("/info", {"type": "metaAndAssetCtxs"})
+        meta = data[0] if len(data) > 0 else {}
+        ctxs = data[1] if len(data) > 1 else []
+        return meta, ctxs
 
-        This ensures the pipeline analyses volatile, high-volume symbols
-        rather than returning an arbitrary fixed slice of the metadata list.
+    async def get_top_movers(self, limit: int = 20) -> list[dict]:
+        """Fetch market data, enrich with candles + funding, and return a
+        BALANCED mix of movers: top gainers, top losers, and high-volume
+        symbols — so the AI sees both long and short opportunities.
         """
         try:
             market_data = await self.get_market_data()
             if not market_data:
                 return []
 
-            # Enrich with candle data so we can rank
+            # Fetch funding rates
+            _, asset_ctxs = await self.get_meta_and_asset_ctxs()
+            funding_map: dict[str, float] = {}
+            meta = await self.get_meta()
+            universe = meta.get("universe", [])
+            for i, ctx in enumerate(asset_ctxs):
+                if i < len(universe):
+                    sym_name = universe[i].get("name", "")
+                    try:
+                        funding_map[sym_name] = float(ctx.get("funding", "0"))
+                    except (ValueError, TypeError):
+                        pass
+
+            # Attach funding to market data
+            for sym in market_data:
+                sym["funding_rate"] = funding_map.get(sym.get("symbol", ""), 0.0)
+
+            # Enrich with candle data
             enriched = await self.enrich_with_candles(market_data)
 
-            # Score each symbol: |price_change_24h%| * log(volume + 1)
+            # Filter out symbols with no candle data
+            enriched = [s for s in enriched if s.get("candle_summary")]
+
             import math
 
             def _activity_score(sym: dict) -> float:
@@ -141,14 +165,82 @@ class HyperliquidService:
                 change = abs(candle.get("price_change_24h_pct", 0))
                 volume = candle.get("total_volume_24h", 0)
                 volatility = abs(candle.get("volatility_pct", 0))
-                # Combine change, volatility and volume into a single score
                 return (change + volatility) * math.log1p(volume)
 
-            enriched.sort(key=_activity_score, reverse=True)
-            return enriched[:limit]
+            # Split into balanced buckets
+            bucket_size = max(limit // 3, 1)
+
+            # Bucket 1: Top gainers (potential SHORT / mean-reversion candidates)
+            gainers = sorted(
+                enriched,
+                key=lambda s: s.get("candle_summary", {}).get(
+                    "price_change_24h_pct", 0
+                ),
+                reverse=True,
+            )[:bucket_size]
+
+            # Bucket 2: Top losers (potential BUY / bounce candidates)
+            losers = sorted(
+                enriched,
+                key=lambda s: s.get("candle_summary", {}).get(
+                    "price_change_24h_pct", 0
+                ),
+            )[:bucket_size]
+
+            # Bucket 3: Highest activity regardless of direction
+            by_activity = sorted(enriched, key=_activity_score, reverse=True)
+
+            # Merge, dedup, preserve order
+            seen = set()
+            merged: list[dict] = []
+            for sym in gainers + losers + by_activity:
+                name = sym.get("symbol", "")
+                if name not in seen:
+                    seen.add(name)
+                    merged.append(sym)
+                if len(merged) >= limit:
+                    break
+
+            # Add regime and exhaustion tags to each symbol
+            for sym in merged:
+                candle = sym.get("candle_summary", {})
+                change = candle.get("price_change_24h_pct", 0)
+                rsi = candle.get("rsi_14", 50)
+                funding = sym.get("funding_rate", 0)
+
+                # Regime classification
+                if change > 8 and rsi > 65:
+                    regime = "extended_up"
+                elif change < -8 and rsi < 35:
+                    regime = "extended_down"
+                elif change > 3:
+                    regime = "trending_up"
+                elif change < -3:
+                    regime = "trending_down"
+                else:
+                    regime = "ranging"
+
+                candle["regime"] = regime
+                candle["funding_rate"] = round(funding * 100, 4)  # as percentage
+
+            logger.info(
+                "Top movers: %d gainers, %d losers, %d total — regimes: %s",
+                len(gainers),
+                len(losers),
+                len(merged),
+                ", ".join(
+                    f"{s.get('symbol')}={s.get('candle_summary', {}).get('regime', '?')}"
+                    for s in merged[:5]
+                ),
+            )
+            return merged
         except Exception as e:
-            logger.error(f"Failed to fetch top gainers: {e}")
+            logger.error(f"Failed to fetch top movers: {e}")
             return []
+
+    # Keep old name as alias for backwards compatibility
+    async def get_top_gainers(self, limit: int = 20) -> list[dict]:
+        return await self.get_top_movers(limit=limit)
 
     async def enrich_with_candles(self, symbols: list[dict]) -> list[dict]:
         """Add 24h candle summary to each symbol's market data.
@@ -303,6 +395,75 @@ class HyperliquidService:
                 )
                 atr_pct = (atr_14 / close_latest * 100) if close_latest > 0 else 0
 
+                # ── Exhaustion indicators ──────────────────────────
+                # SMA20 distance
+                sma_period = min(20, len(closes))
+                sma_20 = (
+                    sum(closes[-sma_period:]) / sma_period
+                    if sma_period > 0
+                    else close_latest
+                )
+                price_vs_sma20_pct = (
+                    ((close_latest - sma_20) / sma_20 * 100) if sma_20 > 0 else 0
+                )
+
+                # Volume trend: compare last 6h avg vs prior 6h avg
+                vol_recent = volumes[-6:] if len(volumes) >= 6 else volumes
+                vol_prior = (
+                    volumes[-12:-6]
+                    if len(volumes) >= 12
+                    else volumes[: len(volumes) // 2]
+                    if volumes
+                    else [1]
+                )
+                avg_vol_recent = sum(vol_recent) / len(vol_recent) if vol_recent else 0
+                avg_vol_prior = sum(vol_prior) / len(vol_prior) if vol_prior else 1
+                if avg_vol_prior > 0 and avg_vol_recent > avg_vol_prior * 1.3:
+                    volume_trend = "increasing"
+                elif avg_vol_prior > 0 and avg_vol_recent < avg_vol_prior * 0.7:
+                    volume_trend = "decreasing"
+                else:
+                    volume_trend = "flat"
+
+                # Wick rejection analysis (last 3 candles)
+                upper_wick_ratio = 0
+                lower_wick_ratio = 0
+                wick_candles = min(3, len(candles_1h))
+                for ci in range(-wick_candles, 0):
+                    c_range = highs[ci] - lows[ci]
+                    if c_range > 0:
+                        body_top = max(opens[ci], closes[ci])
+                        body_bot = min(opens[ci], closes[ci])
+                        upper_wick_ratio += (highs[ci] - body_top) / c_range
+                        lower_wick_ratio += (body_bot - lows[ci]) / c_range
+                upper_wick_ratio /= wick_candles if wick_candles > 0 else 1
+                lower_wick_ratio /= wick_candles if wick_candles > 0 else 1
+
+                if upper_wick_ratio > 0.45:
+                    rejection_signal = "bearish_wicks"
+                elif lower_wick_ratio > 0.45:
+                    rejection_signal = "bullish_wicks"
+                else:
+                    rejection_signal = "neutral"
+
+                # Bollinger Bands (20-period, 2 std dev)
+                bb_data = closes[-sma_period:]
+                if len(bb_data) >= 2:
+                    bb_mean = sum(bb_data) / len(bb_data)
+                    bb_std = (
+                        sum((x - bb_mean) ** 2 for x in bb_data) / len(bb_data)
+                    ) ** 0.5
+                    bb_upper = bb_mean + 2 * bb_std
+                    bb_lower = bb_mean - 2 * bb_std
+                    if close_latest > bb_upper:
+                        bb_position = "above_upper"
+                    elif close_latest < bb_lower:
+                        bb_position = "below_lower"
+                    else:
+                        bb_position = "middle"
+                else:
+                    bb_position = "unknown"
+
                 sym["candle_summary"] = {
                     "high_24h": round(high_24h, 4),
                     "low_24h": round(low_24h, 4),
@@ -319,6 +480,11 @@ class HyperliquidService:
                     "htf_trend_4h": htf_trend,
                     "htf_rsi_4h": htf_rsi,
                     "num_candles": len(candles_1h),
+                    # Exhaustion indicators
+                    "price_vs_sma20_pct": round(price_vs_sma20_pct, 2),
+                    "volume_trend": volume_trend,
+                    "rejection_signal": rejection_signal,
+                    "bb_position": bb_position,
                 }
             except Exception as e:
                 logger.warning(f"Failed to fetch candles for {coin}: {e}")

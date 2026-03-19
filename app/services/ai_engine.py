@@ -18,6 +18,8 @@ settings = get_settings()
 
 ANALYSIS_PROMPT_TEMPLATE = """You are a professional crypto perpetual futures trader on HyperLiquid. Your #1 priority is capital preservation — you only take trades with a clear structural edge.
 
+CRITICAL CONTEXT: This is perpetual futures — SHORT positions profit from price drops. You must treat BUY and SELL equally. Do NOT have a long bias. After large pumps, SHORT setups are often HIGHER probability than BUY setups.
+
 Symbol: {symbol}
 Current Price: ${price}
 
@@ -26,6 +28,9 @@ Market Data (1h candles, 24h):
 
 Higher Timeframe Context:
 {htf_summary}
+
+Exhaustion & Mean-Reversion Indicators:
+{exhaustion_summary}
 
 Key Levels:
 {key_levels}
@@ -50,12 +55,32 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     }}
 }}
 
-MANDATORY RULES — you must follow ALL of these:
+MANDATORY RULES — you must follow ALL of these IN ORDER:
 
-1. HIGHER TIMEFRAME ALIGNMENT (most important):
+0. OVEREXTENSION CHECK (evaluate this FIRST — before anything else):
+   - If 24h price change > +8% AND RSI (1h) > 65: the asset is OVEREXTENDED UP
+     → Default bias must be SELL or HOLD — do NOT buy into a pump
+     → Only BUY if price has pulled back to a key support AND RSI has cooled below 45
+   - If 24h price change < -8% AND RSI (1h) < 35: the asset is OVEREXTENDED DOWN
+     → Default bias must be BUY or HOLD — do NOT short into a crash
+     → Only SELL if price has bounced to a key resistance AND RSI has risen above 55
+   - If price is >4% above SMA20 (price_vs_sma20_pct > 4): treat as overextended up
+   - If price is >4% below SMA20 (price_vs_sma20_pct < -4): treat as overextended down
+   - If Bollinger Band position is "above_upper": strongly favor SELL or HOLD
+   - If Bollinger Band position is "below_lower": strongly favor BUY or HOLD
+   - Declining volume on a large move = exhaustion signal, favor counter-trend
+   - Bearish wicks (rejection_signal = "bearish_wicks") after a pump = distribution, favor SELL
+   - Bullish wicks (rejection_signal = "bullish_wicks") after a dump = accumulation, favor BUY
+   - Extreme positive funding rate (> 0.01%) = crowded longs, favor SELL or HOLD
+   - Extreme negative funding rate (< -0.01%) = crowded shorts, favor BUY or HOLD
+
+1. HIGHER TIMEFRAME ALIGNMENT:
    - BUY only when 4h trend is "bullish" or "ranging" — NEVER buy into a bearish 4h trend
    - SELL only when 4h trend is "bearish" or "ranging" — NEVER sell into a bullish 4h trend
-   - If the 4h trend contradicts the 1h signal, output HOLD
+   - EXCEPTION: If the asset is overextended (Rule 0), a COUNTER-TREND trade against
+     the 4h trend is acceptable if exhaustion indicators confirm (declining volume + wick
+     rejection + extreme RSI)
+   - If the 4h trend contradicts the 1h signal and no exhaustion is present, output HOLD
 
 2. STOP LOSS PLACEMENT (critical for survival):
    - Place stop loss BEHIND the nearest key level (support for BUY, resistance for SELL)
@@ -68,26 +93,34 @@ MANDATORY RULES — you must follow ALL of these:
 3. TAKE PROFIT:
    - Risk:reward ratio must be at least 2.5:1 (TP distance >= 2.5x SL distance)
    - Target the nearest resistance (for BUY) or support (for SELL) as first TP
+   - For mean-reversion trades: target the SMA20 or middle of the range as TP
    - If the nearest level doesn't offer 2.5:1 R:R, signal HOLD
 
 4. ENTRY QUALITY:
-   - RSI must support direction: BUY only if RSI < 60, SELL only if RSI > 40
+   - For TREND-FOLLOWING entries:
+     BUY only if RSI < 55, SELL only if RSI > 45
+   - For MEAN-REVERSION entries (after overextension):
+     BUY only if RSI < 35 (oversold), SELL only if RSI > 65 (overbought)
+   - If 24h change > +5%: BUY requires RSI < 40 (stricter — asset already ran)
+   - If 24h change < -5%: SELL requires RSI > 60 (stricter — asset already fell)
    - 4h RSI should confirm: avoid BUY if 4h RSI > 70, avoid SELL if 4h RSI < 30
    - Volume must be normal or high — avoid low-volume setups
-   - Price must be near a key level (within 1% of support for BUY, resistance for SELL)
-   - Avoid entering in the middle of a range — wait for level tests
+   - Price should be near a key level (within 1.5% of support for BUY, resistance for SELL)
 
 5. CONFIDENCE SCORING:
-   - 0.85+: Strong multi-timeframe alignment, clear level, volume surge
+   - 0.85+: Strong multi-timeframe alignment, clear level, volume confirms
    - 0.75-0.84: Good setup but one minor concern
    - 0.70-0.74: Marginal — only with very clear structure
    - Below 0.70: Signal HOLD regardless
+   - PENALTY: If signal direction matches 24h move direction (buying a pump or shorting a dump),
+     subtract 0.10 from confidence — you're chasing, not anticipating
 
 6. DEFAULT TO HOLD:
    - When in doubt, HOLD. Missed trades cost nothing, bad trades cost capital
    - If price is mid-range with no clear level test, HOLD
-   - If 1h and 4h trends conflict, HOLD
+   - If 1h and 4h trends conflict AND no exhaustion setup, HOLD
    - If volatility is extreme (ATR > 5%), HOLD — conditions are too choppy
+   - If the asset already moved >10% in 24h and you can't find a mean-reversion setup, HOLD
 """
 
 
@@ -126,6 +159,20 @@ class AIEngineService:
                 f"- 4h RSI: {htf_rsi if htf_rsi is not None else 'N/A'}"
             )
 
+            # Exhaustion / mean-reversion indicators
+            regime = candle.get("regime", "unknown")
+            funding = candle.get("funding_rate", 0)
+            exhaustion_lines = (
+                f"- Market Regime: {regime}\n"
+                f"- Price vs SMA20: {candle.get('price_vs_sma20_pct', 'N/A')}% "
+                f"({'above' if (candle.get('price_vs_sma20_pct', 0) or 0) > 0 else 'below'} mean)\n"
+                f"- Volume Trend (recent vs prior 6h): {candle.get('volume_trend', 'N/A')}\n"
+                f"- Candle Wick Analysis: {candle.get('rejection_signal', 'N/A')}\n"
+                f"- Bollinger Band Position: {candle.get('bb_position', 'N/A')}\n"
+                f"- Funding Rate: {funding}% "
+                f"({'crowded longs — contrarian SHORT signal' if funding > 0.01 else 'crowded shorts — contrarian BUY signal' if funding < -0.01 else 'neutral'})"
+            )
+
             # Key levels
             support = candle.get("nearest_support")
             resistance = candle.get("nearest_resistance")
@@ -138,6 +185,7 @@ class AIEngineService:
         else:
             candle_lines = "No candle data available"
             htf_lines = "No higher timeframe data available"
+            exhaustion_lines = "No exhaustion data available"
             level_lines = "No key levels identified"
 
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
@@ -145,6 +193,7 @@ class AIEngineService:
             price=market_data.get("mid_price", "N/A"),
             candle_summary=candle_lines,
             htf_summary=htf_lines,
+            exhaustion_summary=exhaustion_lines,
             key_levels=level_lines,
             context=json.dumps(market_data, default=str),
         )
@@ -208,7 +257,9 @@ class AIEngineService:
                 logger.error(f"Model query exception: {r}")
         return valid_results
 
-    def aggregate_signals(self, model_responses: list[dict]) -> dict | None:
+    def aggregate_signals(
+        self, model_responses: list[dict], candle_summary: dict | None = None
+    ) -> dict | None:
         if not model_responses:
             return None
 
@@ -254,6 +305,29 @@ class AIEngineService:
         avg_tp = sum(r.get("take_profit", 0) for r in consensus_responses) / len(
             consensus_responses
         )
+
+        # ── Phase 5: Confidence penalty when chasing the move ──────────
+        if candle_summary:
+            change_24h = candle_summary.get("price_change_24h_pct", 0)
+            # Buying into a pump or shorting into a dump = chasing
+            if direction == SignalDirection.BUY and change_24h > 5:
+                penalty = min(0.15, change_24h * 0.01)  # up to 0.15
+                logger.info(
+                    "Confidence penalty -%.2f for BUY on %s (+%.1f%% 24h)",
+                    penalty,
+                    candle_summary.get("symbol", "?"),
+                    change_24h,
+                )
+                avg_confidence -= penalty
+            elif direction == SignalDirection.SELL and change_24h < -5:
+                penalty = min(0.15, abs(change_24h) * 0.01)
+                logger.info(
+                    "Confidence penalty -%.2f for SELL on %s (%.1f%% 24h)",
+                    penalty,
+                    candle_summary.get("symbol", "?"),
+                    change_24h,
+                )
+                avg_confidence -= penalty
 
         # Aggregate indicators from first consensus response
         indicators = consensus_responses[0].get("indicators", {})
@@ -319,6 +393,10 @@ class AIEngineService:
         # until the next pipeline run can replace them.
         signal_lifetime = timedelta(hours=settings.analysis_schedule_hours, minutes=15)
 
+        buy_count = 0
+        sell_count = 0
+        hold_count = 0
+
         for symbol_data in symbols:
             symbol = symbol_data.get("symbol", "")
             if not symbol:
@@ -327,11 +405,60 @@ class AIEngineService:
             if symbol in active_symbols:
                 continue
 
+            candle = symbol_data.get("candle_summary", {})
             model_responses = await self.query_all_models(symbol, symbol_data)
-            aggregated = self.aggregate_signals(model_responses)
+            aggregated = self.aggregate_signals(model_responses, candle_summary=candle)
 
             if aggregated is None:
+                hold_count += 1
                 logger.info("No consensus for %s, skipping", symbol)
+                continue
+
+            direction = aggregated["direction"]
+
+            # ── Phase 4: Hard post-generation filters ──────────────────
+            change_24h = candle.get("price_change_24h_pct", 0)
+            rsi = candle.get("rsi_14", 50)
+            funding = candle.get("funding_rate", 0)
+
+            # Reject BUY on overbought / overextended up assets
+            if direction == SignalDirection.BUY and change_24h > 10 and rsi > 65:
+                logger.info(
+                    "FILTER: Rejecting BUY on %s — +%.1f%% 24h, RSI %.1f (overextended up)",
+                    symbol,
+                    change_24h,
+                    rsi,
+                )
+                hold_count += 1
+                continue
+
+            # Reject SELL on oversold / overextended down assets
+            if direction == SignalDirection.SELL and change_24h < -10 and rsi < 35:
+                logger.info(
+                    "FILTER: Rejecting SELL on %s — %.1f%% 24h, RSI %.1f (overextended down)",
+                    symbol,
+                    change_24h,
+                    rsi,
+                )
+                hold_count += 1
+                continue
+
+            # Reject signals against extreme funding (crowded trades)
+            if direction == SignalDirection.BUY and funding > 0.05:
+                logger.info(
+                    "FILTER: Rejecting BUY on %s — funding rate %.3f%% (crowded longs)",
+                    symbol,
+                    funding,
+                )
+                hold_count += 1
+                continue
+            if direction == SignalDirection.SELL and funding < -0.05:
+                logger.info(
+                    "FILTER: Rejecting SELL on %s — funding rate %.3f%% (crowded shorts)",
+                    symbol,
+                    funding,
+                )
+                hold_count += 1
                 continue
 
             if aggregated["confidence"] < settings.ate_confidence_threshold:
@@ -341,12 +468,14 @@ class AIEngineService:
                     aggregated["confidence"],
                     settings.ate_confidence_threshold,
                 )
+                hold_count += 1
                 continue
 
             # Require minimum 2:1 risk:reward ratio
             rr = aggregated.get("risk_reward_ratio", 0)
             if rr and rr < 2.0:
                 logger.info("Skipping %s: R:R ratio %.2f below 2.0 minimum", symbol, rr)
+                hold_count += 1
                 continue
 
             # Reject signals with stop loss too tight (< 1.5% from entry)
@@ -361,7 +490,13 @@ class AIEngineService:
                         symbol,
                         sl_distance_pct,
                     )
+                    hold_count += 1
                     continue
+
+            if direction == SignalDirection.BUY:
+                buy_count += 1
+            else:
+                sell_count += 1
 
             signal = Signal(
                 symbol=symbol,
@@ -382,5 +517,15 @@ class AIEngineService:
 
         if generated_signals:
             await db.flush()
+
+        # Direction balance logging
+        logger.info(
+            "Signal generation complete: %d BUY, %d SELL, %d HOLD/filtered — "
+            "total symbols analyzed: %d",
+            buy_count,
+            sell_count,
+            hold_count,
+            len(symbols),
+        )
 
         return generated_signals
