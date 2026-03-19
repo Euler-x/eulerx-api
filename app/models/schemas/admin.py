@@ -40,8 +40,8 @@ class AdminUserUpdate(BaseModel):
 
 class AdminUserDetailResponse(BaseModel):
     id: uuid.UUID
-    wallet_address_hash: str
-    wallet_type: WalletType
+    wallet_address_hash: Optional[str] = None
+    wallet_type: Optional[WalletType] = None
     is_admin: bool
     is_active: bool
     email: Optional[str] = None
