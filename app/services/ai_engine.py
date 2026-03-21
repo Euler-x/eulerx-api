@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-ANALYSIS_PROMPT_TEMPLATE = """You are a professional crypto perpetual futures trader on HyperLiquid. Your #1 priority is capital preservation — you only take trades with a clear structural edge.
+ANALYSIS_PROMPT_TEMPLATE = """You are a professional crypto perpetual futures trader on {exchange_name}. Your #1 priority is capital preservation — you only take trades with a clear structural edge.
 
 CRITICAL CONTEXT: This is perpetual futures — SHORT positions profit from price drops. You must treat BUY and SELL equally. Do NOT have a long bias. After large pumps, SHORT setups are often HIGHER probability than BUY setups.
 
@@ -188,7 +188,12 @@ class AIEngineService:
             exhaustion_lines = "No exhaustion data available"
             level_lines = "No key levels identified"
 
+        # Determine exchange name for prompt context
+        exchange_raw = market_data.get("exchange", "hyperliquid")
+        exchange_name = "Bybit" if exchange_raw == "bybit" else "HyperLiquid"
+
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
+            exchange_name=exchange_name,
             symbol=symbol,
             price=market_data.get("mid_price", "N/A"),
             candle_summary=candle_lines,
@@ -353,19 +358,22 @@ class AIEngineService:
             },
         }
 
-    async def _get_active_signal_symbols(self, db: AsyncSession) -> set[str]:
-        """Return symbols that still have an active (non-expired) signal.
+    async def _get_active_signal_keys(self, db: AsyncSession) -> set[tuple[str, str]]:
+        """Return (symbol, exchange) pairs that still have an active signal.
 
-        Only skips symbols with a live signal — expired signals don't block
-        re-analysis, so each pipeline run can re-evaluate the market fresh.
+        Uses exchange-aware dedup so HL "BTC" and Bybit "BTCUSDT" are
+        tracked independently.
         """
         now = utc_now()
-        query = select(Signal.symbol).where(
+        query = select(Signal.symbol, Signal.exchange).where(
             Signal.status == SignalStatus.NEW,
             Signal.expires_at > now,
         )
         result = await db.execute(query)
-        return {row[0] for row in result.all()}
+        return {
+            (row[0], row[1].value if hasattr(row[1], "value") else str(row[1]))
+            for row in result.all()
+        }
 
     async def generate_signals(
         self,
@@ -381,12 +389,12 @@ class AIEngineService:
 
         # Only skip symbols that still have an active (non-expired) signal.
         # Expired signals no longer block re-analysis.
-        active_symbols = await self._get_active_signal_symbols(db)
-        if active_symbols:
+        active_signal_keys = await self._get_active_signal_keys(db)
+        if active_signal_keys:
             logger.info(
                 "Skipping %d symbols with active signals: %s",
-                len(active_symbols),
-                ", ".join(sorted(active_symbols)),
+                len(active_signal_keys),
+                ", ".join(f"{s}({e})" for s, e in sorted(active_signal_keys)),
             )
 
         # Signal lifetime matches pipeline frequency so signals stay live
@@ -402,7 +410,9 @@ class AIEngineService:
             if not symbol:
                 continue
 
-            if symbol in active_symbols:
+            exchange_str = symbol_data.get("exchange", Exchange.HYPERLIQUID.value)
+            signal_key = (symbol, exchange_str)
+            if signal_key in active_signal_keys:
                 continue
 
             candle = symbol_data.get("candle_summary", {})

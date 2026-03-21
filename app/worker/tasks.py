@@ -186,6 +186,14 @@ async def _execute_signal_for_strategy_async(signal_id: str, strategy_id: str) -
 
             user = strategy.user
 
+            # Check exchange compatibility — skip early without creating
+            # a failed execution record (avoids DB noise)
+            signal_exchange = getattr(signal, "exchange", Exchange.HYPERLIQUID)
+            if signal_exchange == Exchange.BYBIT and not user.bybit_configured:
+                return {"status": "skipped", "reason": "User has no Bybit keys"}
+            if signal_exchange == Exchange.HYPERLIQUID and not user.wallet_address:
+                return {"status": "skipped", "reason": "User has no HL wallet"}
+
             # Verify user has ATE access via subscription
             sub_result = await session.execute(
                 select(Subscription)

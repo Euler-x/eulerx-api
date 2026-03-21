@@ -37,7 +37,6 @@ ate_rate_limiter = InMemoryRateLimiter(
 class ATEService:
     def __init__(self):
         self.hyperliquid = HyperliquidService()
-        self.bybit = BybitService()
 
     def evaluate_signal(
         self,
@@ -228,7 +227,8 @@ class ATEService:
             signal_id=signal.id,
             user_id=user.id,
             strategy_id=strategy.id,
-            wallet_address_hash=user.wallet_address_hash or "",
+            wallet_address_hash=user.wallet_address_hash
+            or f"bybit:{str(user.id)[:16]}",
             order_type=OrderType.MARKET,
             direction=signal.direction,
             entry_price=entry_price or float(signal.entry_price),
@@ -396,7 +396,8 @@ class ATEService:
             signal_id=signal.id,
             user_id=user.id,
             strategy_id=strategy.id,
-            wallet_address_hash=user.wallet_address_hash or "",
+            wallet_address_hash=user.wallet_address_hash
+            or f"bybit:{str(user.id)[:16]}",
             order_type=OrderType.MARKET,
             direction=signal.direction,
             entry_price=entry_price,
@@ -634,7 +635,12 @@ class ATEService:
         daily_pnl = result.scalar() or 0.0
 
         # Use wallet balance to calculate drawdown percentage
-        available_balance = await self._get_wallet_balance(user)
+        # Try Bybit first if configured, then Hyperliquid
+        available_balance = None
+        if user.bybit_configured:
+            available_balance = await self._get_bybit_balance(user)
+        if available_balance is None:
+            available_balance = await self._get_wallet_balance(user)
         if available_balance is None or available_balance <= 0:
             return False
 
@@ -674,15 +680,12 @@ class ATEService:
         return False
 
     async def monitor_positions(self, db: AsyncSession) -> list[dict]:
-        """Reconcile open executions with actual HyperLiquid position state.
+        """Reconcile open executions with actual exchange position state.
 
-        For each FILLED execution in our DB, checks whether the position still
-        exists on HyperLiquid. If it's gone (closed by native TP/SL or manually),
-        looks up the closing fill to get the real exit price and updates the DB.
-
-        Returns a list of result dicts for each reconciled/closed position.
+        Handles both Hyperliquid and Bybit executions. For each FILLED execution,
+        checks whether the position still exists on the exchange. If gone (closed
+        by native TP/SL or manually), looks up exit data and updates the DB.
         """
-        # Load all open executions with their signals, strategies, and users
         result = await db.execute(
             select(Execution)
             .options(
@@ -700,56 +703,57 @@ class ATEService:
         if not open_executions:
             return []
 
-        # Group executions by user wallet address
+        # Split executions by exchange
+        hl_executions: list[Execution] = []
+        bybit_executions: list[Execution] = []
+        for ex in open_executions:
+            if not ex.user or not ex.signal:
+                continue
+            ex_exchange = getattr(ex, "exchange", Exchange.HYPERLIQUID)
+            if ex_exchange == Exchange.BYBIT:
+                bybit_executions.append(ex)
+            else:
+                hl_executions.append(ex)
+
+        closed: list[dict] = []
+        notification_service = NotificationService()
+
+        # ── Monitor Hyperliquid positions ──────────────────────────────
         by_wallet: dict[str, list[Execution]] = {}
-        for execution in open_executions:
+        for execution in hl_executions:
             user = execution.user
             if not user or not user.wallet_address:
                 continue
             by_wallet.setdefault(user.wallet_address, []).append(execution)
 
-        closed = []
-        notification_service = NotificationService()
-
         for wallet_address, executions in by_wallet.items():
-            # Fetch actual HL positions for this user
             hl_positions = await self.hyperliquid.get_user_positions(wallet_address)
-
-            # Fetch recent fills to find exit data for closed positions
             fills = await self.hyperliquid.get_user_fills(wallet_address)
 
             for execution in executions:
                 signal = execution.signal
                 user = execution.user
                 strategy = execution.strategy
-
                 if not signal or not user:
                     continue
 
                 symbol = signal.symbol
                 entry_price = float(execution.entry_price)
-                quantity = float(execution.quantity)
                 is_buy = execution.direction == SignalDirection.BUY
 
-                # Check if position still exists on HL
                 hl_pos = hl_positions.get(symbol)
                 if hl_pos is not None:
-                    # Position still open on HL — skip
                     continue
 
-                # Position is gone on HL — find the closing fill
                 exit_price = None
                 close_hash = None
-                triggered = None
-
-                # Look for the closing fill (opposite side from our entry)
-                close_side = "A" if is_buy else "B"  # A=sell, B=buy
+                closed_pnl = 0.0
+                close_side = "A" if is_buy else "B"
                 entry_time_ms = (
                     int(execution.executed_at.timestamp() * 1000)
                     if execution.executed_at
                     else 0
                 )
-
                 for fill in reversed(fills):
                     if (
                         fill.get("coin") == symbol
@@ -762,96 +766,188 @@ class ATEService:
                         break
 
                 if exit_price is None:
-                    # No closing fill found yet — might still be pending
-                    logger.debug(
-                        "No closing fill found for %s %s (exec %s)",
-                        symbol,
-                        execution.id,
-                        wallet_address,
-                    )
                     continue
 
-                # Calculate PnL from actual fill data
-                if closed_pnl:
-                    execution.pnl = closed_pnl
-                elif is_buy:
-                    execution.pnl = (exit_price - entry_price) * quantity
-                else:
-                    execution.pnl = (entry_price - exit_price) * quantity
-
-                execution.exit_price = exit_price
-                execution.status = ExecutionStatus.CLOSED
-                if close_hash:
-                    execution.tx_hash = close_hash
-
-                # Determine if it was TP or SL
-                tp_price = float(signal.take_profit) if signal.take_profit else None
-                sl_price = float(signal.stop_loss) if signal.stop_loss else None
-
-                if tp_price and (
-                    (is_buy and exit_price >= tp_price * 0.99)
-                    or (not is_buy and exit_price <= tp_price * 1.01)
-                ):
-                    triggered = "take_profit"
-                elif sl_price and (
-                    (is_buy and exit_price <= sl_price * 1.01)
-                    or (not is_buy and exit_price >= sl_price * 0.99)
-                ):
-                    triggered = "stop_loss"
-                else:
-                    triggered = "closed"
-
-                pnl_str = f"{float(execution.pnl):+.4f}"
-                strategy_name = strategy.name if strategy else "Unknown"
-
-                # Send notification
-                try:
-                    if triggered == "take_profit":
-                        await notification_service.send_take_profit_hit(
-                            user=user,
-                            symbol=symbol,
-                            direction=execution.direction.value,
-                            entry_price=str(entry_price),
-                            exit_price=str(exit_price),
-                            pnl=pnl_str,
-                            strategy_name=strategy_name,
-                        )
-                    elif triggered == "stop_loss":
-                        await notification_service.send_stop_loss_hit(
-                            user=user,
-                            symbol=symbol,
-                            direction=execution.direction.value,
-                            entry_price=str(entry_price),
-                            exit_price=str(exit_price),
-                            pnl=pnl_str,
-                            strategy_name=strategy_name,
-                        )
-                except Exception as e:
-                    logger.error("Failed to send %s notification: %s", triggered, e)
-
-                closed.append(
-                    {
-                        "execution_id": str(execution.id),
-                        "symbol": symbol,
-                        "triggered": triggered,
-                        "entry_price": entry_price,
-                        "exit_price": exit_price,
-                        "pnl": float(execution.pnl),
-                        "tx_hash": close_hash,
-                    }
-                )
-
-                logger.info(
-                    "%s for %s: entry=%.4f exit=%.4f pnl=%s (user %s)",
-                    triggered.upper().replace("_", " "),
-                    symbol,
-                    entry_price,
+                result_entry = self._reconcile_closed_position(
+                    execution,
+                    signal,
+                    strategy,
+                    user,
                     exit_price,
-                    pnl_str,
-                    user.id,
+                    close_hash,
+                    closed_pnl,
+                    notification_service,
                 )
+                if result_entry:
+                    closed.append(result_entry)
+
+        # ── Monitor Bybit positions ────────────────────────────────────
+        by_user_id: dict[str, list[Execution]] = {}
+        for execution in bybit_executions:
+            user = execution.user
+            if not user or not user.bybit_configured:
+                continue
+            by_user_id.setdefault(str(user.id), []).append(execution)
+
+        for _uid, executions in by_user_id.items():
+            user = executions[0].user
+            bybit_keys = self._get_bybit_keys(user)
+            if not bybit_keys:
+                continue
+            api_key, api_secret = bybit_keys
+            user_bybit = self._get_user_bybit_service(user)
+
+            bybit_positions = await user_bybit.get_user_positions(api_key, api_secret)
+
+            for execution in executions:
+                signal = execution.signal
+                strategy = execution.strategy
+                if not signal or not user:
+                    continue
+
+                symbol = signal.symbol
+                entry_price = float(execution.entry_price)
+                is_buy = execution.direction == SignalDirection.BUY
+
+                bb_pos = bybit_positions.get(symbol)
+                if bb_pos is not None:
+                    continue
+
+                # Position gone on Bybit — calculate PnL from entry
+                # Bybit doesn't have a fills API as easy as HL, use mark price
+                exit_price = entry_price  # fallback
+                # Try to get current price for a better estimate
+                try:
+                    tickers = await user_bybit.get_all_tickers()
+                    for t in tickers:
+                        if t.get("symbol") == symbol:
+                            exit_price = float(t.get("lastPrice", entry_price))
+                            break
+                except Exception:
+                    pass
+
+                closed_pnl = 0.0  # will be calculated in reconcile
+
+                result_entry = self._reconcile_closed_position(
+                    execution,
+                    signal,
+                    strategy,
+                    user,
+                    exit_price,
+                    None,
+                    closed_pnl,
+                    notification_service,
+                )
+                if result_entry:
+                    closed.append(result_entry)
 
         if closed:
             await db.flush()
 
+        # Send notifications after flush
+        for entry in closed:
+            await self._send_close_notification(entry, notification_service)
+
         return closed
+
+    def _reconcile_closed_position(
+        self,
+        execution: Execution,
+        signal: Signal,
+        strategy: Strategy | None,
+        user: User,
+        exit_price: float,
+        close_hash: str | None,
+        closed_pnl: float,
+        notification_service: NotificationService,
+    ) -> dict | None:
+        """Update execution with exit data and return result dict."""
+        entry_price = float(execution.entry_price)
+        quantity = float(execution.quantity)
+        is_buy = execution.direction == SignalDirection.BUY
+
+        if closed_pnl:
+            execution.pnl = closed_pnl
+        elif is_buy:
+            execution.pnl = (exit_price - entry_price) * quantity
+        else:
+            execution.pnl = (entry_price - exit_price) * quantity
+
+        execution.exit_price = exit_price
+        execution.status = ExecutionStatus.CLOSED
+        if close_hash:
+            execution.tx_hash = close_hash
+
+        tp_price = float(signal.take_profit) if signal.take_profit else None
+        sl_price = float(signal.stop_loss) if signal.stop_loss else None
+
+        if tp_price and (
+            (is_buy and exit_price >= tp_price * 0.99)
+            or (not is_buy and exit_price <= tp_price * 1.01)
+        ):
+            triggered = "take_profit"
+        elif sl_price and (
+            (is_buy and exit_price <= sl_price * 1.01)
+            or (not is_buy and exit_price >= sl_price * 0.99)
+        ):
+            triggered = "stop_loss"
+        else:
+            triggered = "closed"
+
+        pnl_str = f"{float(execution.pnl):+.4f}"
+        strategy_name = strategy.name if strategy else "Unknown"
+
+        logger.info(
+            "%s for %s: entry=%.4f exit=%.4f pnl=%s (user %s, %s)",
+            triggered.upper().replace("_", " "),
+            signal.symbol,
+            entry_price,
+            exit_price,
+            pnl_str,
+            user.id,
+            getattr(execution, "exchange", "hyperliquid"),
+        )
+
+        return {
+            "execution_id": str(execution.id),
+            "symbol": signal.symbol,
+            "triggered": triggered,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "pnl": float(execution.pnl),
+            "tx_hash": close_hash,
+            "user": user,
+            "strategy_name": strategy_name,
+            "direction": execution.direction.value,
+        }
+
+    async def _send_close_notification(
+        self, entry: dict, notification_service: NotificationService
+    ) -> None:
+        """Send TP/SL notification for a closed position."""
+        user = entry.get("user")
+        if not user:
+            return
+        try:
+            if entry["triggered"] == "take_profit":
+                await notification_service.send_take_profit_hit(
+                    user=user,
+                    symbol=entry["symbol"],
+                    direction=entry["direction"],
+                    entry_price=str(entry["entry_price"]),
+                    exit_price=str(entry["exit_price"]),
+                    pnl=f"{entry['pnl']:+.4f}",
+                    strategy_name=entry["strategy_name"],
+                )
+            elif entry["triggered"] == "stop_loss":
+                await notification_service.send_stop_loss_hit(
+                    user=user,
+                    symbol=entry["symbol"],
+                    direction=entry["direction"],
+                    entry_price=str(entry["entry_price"]),
+                    exit_price=str(entry["exit_price"]),
+                    pnl=f"{entry['pnl']:+.4f}",
+                    strategy_name=entry["strategy_name"],
+                )
+        except Exception as e:
+            logger.error("Failed to send %s notification: %s", entry["triggered"], e)

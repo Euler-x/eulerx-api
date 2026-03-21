@@ -509,6 +509,7 @@ async def disconnect_bybit(
     """Disconnect Bybit account by removing stored API keys."""
     current_user.bybit_api_key_encrypted = None
     current_user.bybit_api_secret_encrypted = None
+    current_user.bybit_testnet = False
     await db.flush()
 
     return BybitConnectResponse(
