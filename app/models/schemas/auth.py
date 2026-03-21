@@ -104,9 +104,14 @@ class PasswordResetResponse(BaseModel):
 class BybitConnectRequest(BaseModel):
     api_key: str = Field(..., min_length=10, description="Bybit API key")
     api_secret: str = Field(..., min_length=10, description="Bybit API secret")
+    testnet: bool = Field(
+        default=False,
+        description="True for Bybit testnet, False for mainnet (real trading)",
+    )
 
 
 class BybitConnectResponse(BaseModel):
     message: str
     bybit_configured: bool
+    testnet: bool = False
     account_equity: float = 0.0

@@ -475,7 +475,7 @@ async def connect_bybit(
     """
     from app.services.bybit import BybitService
 
-    bybit = BybitService()
+    bybit = BybitService(testnet=request.testnet)
     valid, message = await bybit.validate_api_keys(request.api_key, request.api_secret)
     if not valid:
         raise HTTPException(
@@ -486,14 +486,17 @@ async def connect_bybit(
     # Encrypt and store
     current_user.bybit_api_key_encrypted = encrypt_private_key(request.api_key)
     current_user.bybit_api_secret_encrypted = encrypt_private_key(request.api_secret)
+    current_user.bybit_testnet = request.testnet
     await db.flush()
 
     # Get account equity for confirmation
     equity = await bybit.get_account_value(request.api_key, request.api_secret)
 
+    env_label = "testnet" if request.testnet else "mainnet"
     return BybitConnectResponse(
-        message="Bybit account connected successfully",
+        message=f"Bybit {env_label} account connected successfully",
         bybit_configured=True,
+        testnet=request.testnet,
         account_equity=equity,
     )
 

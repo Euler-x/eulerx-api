@@ -137,6 +137,10 @@ class ATEService:
             logger.error("Failed to decrypt Bybit keys for user %s", user.id)
             return None
 
+    def _get_user_bybit_service(self, user: User) -> BybitService:
+        """Get a BybitService configured for this user's testnet/mainnet setting."""
+        return BybitService(testnet=getattr(user, "bybit_testnet", False))
+
     async def _get_bybit_balance(self, user: User) -> float | None:
         """Fetch available balance from Bybit."""
         keys = self._get_bybit_keys(user)
@@ -144,7 +148,8 @@ class ATEService:
             return None
         api_key, api_secret = keys
         try:
-            balance = await self.bybit.get_available_balance(api_key, api_secret)
+            bybit = self._get_user_bybit_service(user)
+            balance = await bybit.get_available_balance(api_key, api_secret)
             if balance <= 0:
                 return None
             logger.info("User %s Bybit balance: $%.2f", user.id, balance)
@@ -338,7 +343,8 @@ class ATEService:
         # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
         if is_bybit:
-            qty_step = await self.bybit.get_qty_step(signal.symbol)
+            user_bybit = self._get_user_bybit_service(user)
+            qty_step = await user_bybit.get_qty_step(signal.symbol)
             # Derive decimals from qty_step (e.g. 0.001 → 3)
             import math as _math
 
@@ -415,7 +421,7 @@ class ATEService:
 
             # Set leverage
             if target_leverage >= 1:
-                lev_result = await self.bybit.update_leverage(
+                lev_result = await user_bybit.update_leverage(
                     api_key, api_secret, signal.symbol, target_leverage
                 )
                 if not lev_result.get("success"):
@@ -442,7 +448,7 @@ class ATEService:
             tp_price = float(signal.take_profit) if signal.take_profit else None
             sl_price = float(signal.stop_loss) if signal.stop_loss else None
 
-            order_result = await self.bybit.place_order(
+            order_result = await user_bybit.place_order(
                 api_key=api_key,
                 api_secret=api_secret,
                 symbol=signal.symbol,

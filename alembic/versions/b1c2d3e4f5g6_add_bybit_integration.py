@@ -29,6 +29,12 @@ def upgrade() -> None:
     op.add_column(
         "users", sa.Column("bybit_api_secret_encrypted", sa.Text(), nullable=True)
     )
+    op.add_column(
+        "users",
+        sa.Column(
+            "bybit_testnet", sa.Boolean(), nullable=False, server_default="false"
+        ),
+    )
 
     # Signal: exchange source
     op.add_column(
@@ -61,6 +67,7 @@ def downgrade() -> None:
     op.drop_column("executions", "exchange_order_id")
     op.drop_column("executions", "exchange")
     op.drop_column("signals", "exchange")
+    op.drop_column("users", "bybit_testnet")
     op.drop_column("users", "bybit_api_secret_encrypted")
     op.drop_column("users", "bybit_api_key_encrypted")
     exchange_enum.drop(op.get_bind(), checkfirst=True)

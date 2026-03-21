@@ -79,6 +79,9 @@ class User(Base, TimestampMixin):
     bybit_api_secret_encrypted: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )
+    bybit_testnet: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
 
     # Notification preferences (JSON: {category}_{channel} -> bool)
     notification_preferences: Mapped[Optional[dict]] = mapped_column(
