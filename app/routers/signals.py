@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
 from app.middleware.permissions import RequireSubscribed, UserPermissions
-from app.models.enums import SignalDirection, SignalStatus
+from app.models.enums import Exchange, SignalDirection, SignalStatus
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.signal import SignalDetailResponse, SignalResponse
 from app.models.signal import Signal
@@ -23,6 +23,7 @@ async def list_signals(
     symbol: Optional[str] = None,
     direction: Optional[SignalDirection] = None,
     status: Optional[SignalStatus] = None,
+    exchange: Optional[Exchange] = None,
     perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
@@ -38,6 +39,9 @@ async def list_signals(
     if status:
         query = query.where(Signal.status == status)
         count_query = count_query.where(Signal.status == status)
+    if exchange:
+        query = query.where(Signal.exchange == exchange)
+        count_query = count_query.where(Signal.exchange == exchange)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
@@ -57,14 +61,18 @@ async def list_signals(
 
 @router.get("/live", response_model=list[SignalResponse])
 async def get_live_signals(
+    exchange: Optional[Exchange] = None,
     perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
+    query = (
         select(Signal)
         .where(Signal.status.in_([SignalStatus.NEW, SignalStatus.EXECUTING]))
         .order_by(Signal.confidence.desc())
     )
+    if exchange:
+        query = query.where(Signal.exchange == exchange)
+    result = await db.execute(query)
     signals = result.scalars().all()
     return [SignalResponse.model_validate(s) for s in signals]
 
@@ -73,31 +81,24 @@ async def get_live_signals(
 async def get_signal_history(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    exchange: Optional[Exchange] = None,
     perms: UserPermissions = RequireSubscribed,
     db: AsyncSession = Depends(get_db),
 ):
+    status_filter = [
+        SignalStatus.FILLED,
+        SignalStatus.EXPIRED,
+        SignalStatus.CANCELLED,
+    ]
     query = (
         select(Signal)
-        .where(
-            Signal.status.in_(
-                [
-                    SignalStatus.FILLED,
-                    SignalStatus.EXPIRED,
-                    SignalStatus.CANCELLED,
-                ]
-            )
-        )
+        .where(Signal.status.in_(status_filter))
         .order_by(Signal.created_at.desc())
     )
-    count_query = select(func.count(Signal.id)).where(
-        Signal.status.in_(
-            [
-                SignalStatus.FILLED,
-                SignalStatus.EXPIRED,
-                SignalStatus.CANCELLED,
-            ]
-        )
-    )
+    count_query = select(func.count(Signal.id)).where(Signal.status.in_(status_filter))
+    if exchange:
+        query = query.where(Signal.exchange == exchange)
+        count_query = count_query.where(Signal.exchange == exchange)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0

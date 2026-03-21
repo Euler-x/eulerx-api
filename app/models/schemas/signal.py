@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.models.enums import SignalDirection, SignalStatus
+from app.models.enums import Exchange, SignalDirection, SignalStatus
 from app.models.schemas.execution import ExecutionResponse
 
 
@@ -20,6 +20,7 @@ class SignalResponse(BaseModel):
     risk_reward_ratio: Optional[float]
     indicators: Optional[dict]
     status: SignalStatus
+    exchange: Exchange = Exchange.HYPERLIQUID
     expires_at: Optional[datetime]
     created_at: datetime
 
