@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     hyperliquid_api_url: str = "https://api.hyperliquid.xyz"
     hyperliquid_testnet: bool = True
 
+    # Bybit
+    bybit_testnet: bool = False
+
     # NOWPayments
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""

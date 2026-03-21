@@ -159,3 +159,8 @@ class ContentType(str, enum.Enum):
     VIDEO = "video"
     ARTICLE = "article"
     PDF = "pdf"
+
+
+class Exchange(str, enum.Enum):
+    HYPERLIQUID = "hyperliquid"
+    BYBIT = "bybit"

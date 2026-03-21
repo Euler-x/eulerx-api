@@ -10,6 +10,8 @@ from app.models.ambassador import Ambassador
 from app.models.enums import WalletType
 from app.models.schemas.auth import (
     AuthResponse,
+    BybitConnectRequest,
+    BybitConnectResponse,
     EmailSubmitRequest,
     EmailVerificationResponse,
     EmailVerifyRequest,
@@ -454,4 +456,60 @@ async def reset_password(
 
     return PasswordResetResponse(
         message="Password reset successfully. You can now log in."
+    )
+
+
+# ── Bybit API Key Connection ──────────────────────────────────
+
+
+@router.post("/bybit/connect", response_model=BybitConnectResponse)
+async def connect_bybit(
+    request: BybitConnectRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Connect a Bybit account using API key + secret.
+
+    The API key must have trading permissions. We validate the keys
+    by fetching the account balance before saving.
+    """
+    from app.services.bybit import BybitService
+
+    bybit = BybitService()
+    valid, message = await bybit.validate_api_keys(request.api_key, request.api_secret)
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Bybit API key validation failed: {message}",
+        )
+
+    # Encrypt and store
+    current_user.bybit_api_key_encrypted = encrypt_private_key(request.api_key)
+    current_user.bybit_api_secret_encrypted = encrypt_private_key(request.api_secret)
+    await db.flush()
+
+    # Get account equity for confirmation
+    equity = await bybit.get_account_value(request.api_key, request.api_secret)
+
+    return BybitConnectResponse(
+        message="Bybit account connected successfully",
+        bybit_configured=True,
+        account_equity=equity,
+    )
+
+
+@router.post("/bybit/disconnect", response_model=BybitConnectResponse)
+async def disconnect_bybit(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Disconnect Bybit account by removing stored API keys."""
+    current_user.bybit_api_key_encrypted = None
+    current_user.bybit_api_secret_encrypted = None
+    await db.flush()
+
+    return BybitConnectResponse(
+        message="Bybit account disconnected",
+        bybit_configured=False,
+        account_equity=0.0,
     )

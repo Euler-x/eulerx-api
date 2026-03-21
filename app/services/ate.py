@@ -6,11 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
-from app.models.enums import ExecutionStatus, OrderType, SignalDirection, SignalStatus
+from app.models.enums import (
+    Exchange,
+    ExecutionStatus,
+    OrderType,
+    SignalDirection,
+    SignalStatus,
+)
 from app.models.execution import Execution
 from app.models.signal import Signal
 from app.models.strategy import Strategy
 from app.models.user import User
+from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.services.notifications import NotificationService
 from app.services.verification import VerificationService
@@ -30,6 +37,7 @@ ate_rate_limiter = InMemoryRateLimiter(
 class ATEService:
     def __init__(self):
         self.hyperliquid = HyperliquidService()
+        self.bybit = BybitService()
 
     def evaluate_signal(
         self,
@@ -116,6 +124,34 @@ class ATEService:
             )
 
         return quantity
+
+    def _get_bybit_keys(self, user: User) -> tuple[str, str] | None:
+        """Decrypt and return (api_key, api_secret) for a Bybit-configured user."""
+        if not user.bybit_configured:
+            return None
+        try:
+            api_key = decrypt_private_key(user.bybit_api_key_encrypted)
+            api_secret = decrypt_private_key(user.bybit_api_secret_encrypted)
+            return api_key, api_secret
+        except ValueError:
+            logger.error("Failed to decrypt Bybit keys for user %s", user.id)
+            return None
+
+    async def _get_bybit_balance(self, user: User) -> float | None:
+        """Fetch available balance from Bybit."""
+        keys = self._get_bybit_keys(user)
+        if not keys:
+            return None
+        api_key, api_secret = keys
+        try:
+            balance = await self.bybit.get_available_balance(api_key, api_secret)
+            if balance <= 0:
+                return None
+            logger.info("User %s Bybit balance: $%.2f", user.id, balance)
+            return balance
+        except Exception as e:
+            logger.error("Failed to fetch Bybit balance for user %s: %s", user.id, e)
+            return None
 
     async def _get_wallet_balance(self, user: User) -> float | None:
         """Fetch the user's available perps margin from HyperLiquid.
@@ -226,27 +262,39 @@ class ATEService:
             )
             return None
 
-        # ── Pre-execution wallet checks ──────────────────────────────
-        if not user.wallet_address:
-            logger.warning("User %s has no wallet connected, skipping", user.id)
-            execution = self._create_failed_execution(
-                signal, user, strategy, "No wallet connected"
-            )
-            db.add(execution)
-            await db.flush()
-            return execution
+        # ── Determine exchange for this signal ─────────────────────────
+        signal_exchange = getattr(signal, "exchange", Exchange.HYPERLIQUID)
+        is_bybit = signal_exchange == Exchange.BYBIT
 
-        if not user.encrypted_private_key:
-            logger.warning("User %s has no private key stored, skipping", user.id)
-            execution = self._create_failed_execution(
-                signal, user, strategy, "No trading key configured"
-            )
-            db.add(execution)
-            await db.flush()
-            return execution
-
-        # Check wallet has perps margin
-        available_balance = await self._get_wallet_balance(user)
+        # ── Pre-execution wallet/key checks ───────────────────────────
+        if is_bybit:
+            if not user.bybit_configured:
+                logger.warning("User %s has no Bybit keys, skipping", user.id)
+                execution = self._create_failed_execution(
+                    signal, user, strategy, "No Bybit API keys configured"
+                )
+                db.add(execution)
+                await db.flush()
+                return execution
+            available_balance = await self._get_bybit_balance(user)
+        else:
+            if not user.wallet_address:
+                logger.warning("User %s has no wallet connected, skipping", user.id)
+                execution = self._create_failed_execution(
+                    signal, user, strategy, "No wallet connected"
+                )
+                db.add(execution)
+                await db.flush()
+                return execution
+            if not user.encrypted_private_key:
+                logger.warning("User %s has no private key stored, skipping", user.id)
+                execution = self._create_failed_execution(
+                    signal, user, strategy, "No trading key configured"
+                )
+                db.add(execution)
+                await db.flush()
+                return execution
+            available_balance = await self._get_wallet_balance(user)
         if available_balance is None or available_balance < 1.0:
             balance_str = f"${available_balance:.2f}" if available_balance else "$0.00"
             logger.warning(
@@ -289,7 +337,16 @@ class ATEService:
 
         # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
-        sz_decimals = await self._get_sz_decimals(signal.symbol)
+        if is_bybit:
+            qty_step = await self.bybit.get_qty_step(signal.symbol)
+            # Derive decimals from qty_step (e.g. 0.001 → 3)
+            import math as _math
+
+            sz_decimals = (
+                max(0, -int(_math.floor(_math.log10(qty_step)))) if qty_step > 0 else 3
+            )
+        else:
+            sz_decimals = await self._get_sz_decimals(signal.symbol)
         quantity = self.calculate_position_size(
             strategy, entry_price, available_balance, sz_decimals
         )
@@ -333,108 +390,159 @@ class ATEService:
             signal_id=signal.id,
             user_id=user.id,
             strategy_id=strategy.id,
-            wallet_address_hash=user.wallet_address_hash,
+            wallet_address_hash=user.wallet_address_hash or "",
             order_type=OrderType.MARKET,
             direction=signal.direction,
             entry_price=entry_price,
             quantity=quantity,
             leverage=strategy.leverage_limit or settings.ate_default_leverage,
             status=ExecutionStatus.PENDING,
+            exchange=signal_exchange,
         )
         db.add(execution)
 
-        # ── Decrypt private key ──────────────────────────────────────
-        try:
-            private_key = decrypt_private_key(user.encrypted_private_key)
-        except ValueError:
-            logger.error("Failed to decrypt private key for user %s", user.id)
-            execution.status = ExecutionStatus.FAILED
-            execution.error_message = "Failed to decrypt trading key"
-            await db.flush()
-            return execution
-
-        # For connected wallets (agent key), pass account_address so the
-        # agent signs on behalf of the user's main Hyperliquid wallet.
-        # For generated wallets, wallet_address IS the trading wallet.
-        from app.models.enums import WalletType
-
-        account_address = (
-            user.wallet_address if user.wallet_type == WalletType.CONNECTED else None
-        )
-
-        # Set leverage on HyperLiquid to match the strategy's setting
         target_leverage = int(strategy.leverage_limit or settings.ate_default_leverage)
-        if target_leverage >= 1:
-            lev_result = await self.hyperliquid.update_leverage(
-                wallet_private_key=private_key,
-                symbol=signal.symbol,
-                leverage=target_leverage,
-                account_address=account_address,
-            )
-            if not lev_result.get("success"):
-                logger.warning(
-                    "Failed to set leverage to %dx for %s: %s — proceeding with current leverage",
-                    target_leverage,
-                    signal.symbol,
-                    lev_result.get("error"),
+
+        if is_bybit:
+            # ── Bybit execution path ──────────────────────────────────
+            bybit_keys = self._get_bybit_keys(user)
+            if not bybit_keys:
+                execution.status = ExecutionStatus.FAILED
+                execution.error_message = "Failed to decrypt Bybit keys"
+                await db.flush()
+                return execution
+            api_key, api_secret = bybit_keys
+
+            # Set leverage
+            if target_leverage >= 1:
+                lev_result = await self.bybit.update_leverage(
+                    api_key, api_secret, signal.symbol, target_leverage
                 )
+                if not lev_result.get("success"):
+                    logger.warning(
+                        "Failed to set Bybit leverage to %dx for %s: %s",
+                        target_leverage,
+                        signal.symbol,
+                        lev_result.get("error"),
+                    )
 
-        logger.info(
-            "Placing order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
-            "leverage=%dx for user %s strategy %s [risk=%s, allocation=%.0f%%, "
-            "wallet_type=%s, account=%s]",
-            "BUY" if is_buy else "SELL",
-            signal.symbol,
-            quantity,
-            entry_price,
-            notional,
-            target_leverage,
-            user.id,
-            strategy.id,
-            strategy.risk_profile.value,
-            strategy.allocation_pct,
-            user.wallet_type.value if user.wallet_type else "none",
-            account_address or "direct",
-        )
-
-        order_result = await self.hyperliquid.place_order(
-            wallet_private_key=private_key,
-            symbol=signal.symbol,
-            is_buy=is_buy,
-            size=quantity,
-            account_address=account_address,
-            order_type="market",
-        )
-
-        if order_result.get("success"):
-            execution.status = ExecutionStatus.FILLED
-            execution.tx_hash = str(order_result.get("tx_hash", ""))
-            execution.executed_at = utc_now()
             logger.info(
-                "Order FILLED for signal %s strategy %s: tx_hash=%s",
-                signal.id,
-                strategy.id,
-                execution.tx_hash,
-            )
-        else:
-            execution.status = ExecutionStatus.FAILED
-            error_msg = order_result.get("error", "unknown")
-            execution.error_message = str(error_msg)[:500]
-            logger.error(
-                "Order FAILED for signal %s (user %s, strategy %s, symbol %s): %s",
-                signal.id,
+                "Placing Bybit order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
+                "leverage=%dx for user %s strategy %s",
+                "BUY" if is_buy else "SELL",
+                signal.symbol,
+                quantity,
+                entry_price,
+                notional,
+                target_leverage,
                 user.id,
                 strategy.id,
-                signal.symbol,
-                error_msg,
             )
 
-        await db.flush()
+            tp_price = float(signal.take_profit) if signal.take_profit else None
+            sl_price = float(signal.stop_loss) if signal.stop_loss else None
 
-        # Record rate limit
+            order_result = await self.bybit.place_order(
+                api_key=api_key,
+                api_secret=api_secret,
+                symbol=signal.symbol,
+                is_buy=is_buy,
+                size=quantity,
+                order_type="market",
+                take_profit=tp_price,
+                stop_loss=sl_price,
+            )
+
+            if order_result.get("success"):
+                execution.status = ExecutionStatus.FILLED
+                execution.exchange_order_id = str(order_result.get("oid", ""))
+                execution.tx_hash = str(order_result.get("tx_hash", ""))
+                execution.executed_at = utc_now()
+                logger.info(
+                    "Bybit order FILLED for signal %s: order_id=%s",
+                    signal.id,
+                    execution.exchange_order_id,
+                )
+            else:
+                execution.status = ExecutionStatus.FAILED
+                error_msg = order_result.get("error", "unknown")
+                execution.error_message = str(error_msg)[:500]
+                logger.error(
+                    "Bybit order FAILED for signal %s: %s", signal.id, error_msg
+                )
+
+        else:
+            # ── Hyperliquid execution path (existing) ─────────────────
+            try:
+                private_key = decrypt_private_key(user.encrypted_private_key)
+            except ValueError:
+                logger.error("Failed to decrypt private key for user %s", user.id)
+                execution.status = ExecutionStatus.FAILED
+                execution.error_message = "Failed to decrypt trading key"
+                await db.flush()
+                return execution
+
+            from app.models.enums import WalletType
+
+            account_address = (
+                user.wallet_address
+                if user.wallet_type == WalletType.CONNECTED
+                else None
+            )
+
+            if target_leverage >= 1:
+                lev_result = await self.hyperliquid.update_leverage(
+                    wallet_private_key=private_key,
+                    symbol=signal.symbol,
+                    leverage=target_leverage,
+                    account_address=account_address,
+                )
+                if not lev_result.get("success"):
+                    logger.warning(
+                        "Failed to set leverage to %dx for %s: %s",
+                        target_leverage,
+                        signal.symbol,
+                        lev_result.get("error"),
+                    )
+
+            logger.info(
+                "Placing HL order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
+                "leverage=%dx for user %s strategy %s [risk=%s, allocation=%.0f%%]",
+                "BUY" if is_buy else "SELL",
+                signal.symbol,
+                quantity,
+                entry_price,
+                notional,
+                target_leverage,
+                user.id,
+                strategy.id,
+                strategy.risk_profile.value,
+                strategy.allocation_pct,
+            )
+
+            order_result = await self.hyperliquid.place_order(
+                wallet_private_key=private_key,
+                symbol=signal.symbol,
+                is_buy=is_buy,
+                size=quantity,
+                account_address=account_address,
+                order_type="market",
+            )
+
+            if order_result.get("success"):
+                execution.status = ExecutionStatus.FILLED
+                execution.tx_hash = str(order_result.get("tx_hash", ""))
+                execution.executed_at = utc_now()
+            else:
+                execution.status = ExecutionStatus.FAILED
+                error_msg = order_result.get("error", "unknown")
+                execution.error_message = str(error_msg)[:500]
+                logger.error("HL order FAILED for signal %s: %s", signal.id, error_msg)
+
+        await db.flush()
         ate_rate_limiter.record(rate_key)
 
-        # Log transaction and place TP/SL
+        # ── Post-fill: log transaction, place TP/SL, notify ───────────
         if execution.status == ExecutionStatus.FILLED:
             await VerificationService.log_execution_transaction(
                 db=db,
@@ -443,57 +551,48 @@ class ATEService:
                 asset=signal.symbol,
             )
 
-            # Place native TP/SL orders on HyperLiquid
-            tp_price = float(signal.take_profit) if signal.take_profit else None
-            sl_price = float(signal.stop_loss) if signal.stop_loss else None
-
-            if tp_price or sl_price:
-                try:
-                    tpsl_result = await self.hyperliquid.place_tp_sl_orders(
-                        wallet_private_key=private_key,
-                        symbol=signal.symbol,
-                        size=quantity,
-                        is_buy=is_buy,
-                        take_profit_price=tp_price,
-                        stop_loss_price=sl_price,
-                        account_address=account_address,
-                    )
-                    tp_ok = tpsl_result.get("tp_placed", False)
-                    sl_ok = tpsl_result.get("sl_placed", False)
-
-                    if tp_ok and sl_ok:
-                        logger.info(
-                            "TP/SL orders placed for %s: tp=$%s sl=$%s",
-                            signal.symbol,
-                            tp_price,
-                            sl_price,
+            # Place TP/SL (Bybit does it inline with order, HL needs separate calls)
+            if not is_bybit:
+                tp_price = float(signal.take_profit) if signal.take_profit else None
+                sl_price = float(signal.stop_loss) if signal.stop_loss else None
+                if tp_price or sl_price:
+                    try:
+                        tpsl_result = await self.hyperliquid.place_tp_sl_orders(
+                            wallet_private_key=private_key,
+                            symbol=signal.symbol,
+                            size=quantity,
+                            is_buy=is_buy,
+                            take_profit_price=tp_price,
+                            stop_loss_price=sl_price,
+                            account_address=account_address,
                         )
-                    else:
-                        if not tp_ok and tp_price:
-                            logger.error(
-                                "Failed to place TP order for %s at $%s: %s",
+                        tp_ok = tpsl_result.get("tp_placed", False)
+                        sl_ok = tpsl_result.get("sl_placed", False)
+                        if tp_ok and sl_ok:
+                            logger.info(
+                                "TP/SL placed for %s: tp=$%s sl=$%s",
                                 signal.symbol,
                                 tp_price,
-                                tpsl_result.get("results", {}).get("tp", "unknown"),
-                            )
-                        if not sl_ok and sl_price:
-                            logger.error(
-                                "Failed to place SL order for %s at $%s: %s",
-                                signal.symbol,
                                 sl_price,
-                                tpsl_result.get("results", {}).get("sl", "unknown"),
                             )
-                        if tp_ok or sl_ok:
-                            logger.warning(
-                                "Partial TP/SL for %s: tp_placed=%s sl_placed=%s",
-                                signal.symbol,
-                                tp_ok,
-                                sl_ok,
-                            )
-                except Exception as e:
-                    logger.error("Exception placing TP/SL for %s: %s", signal.symbol, e)
+                        else:
+                            if not tp_ok and tp_price:
+                                logger.error(
+                                    "Failed TP for %s: %s",
+                                    signal.symbol,
+                                    tpsl_result.get("results", {}).get("tp"),
+                                )
+                            if not sl_ok and sl_price:
+                                logger.error(
+                                    "Failed SL for %s: %s",
+                                    signal.symbol,
+                                    tpsl_result.get("results", {}).get("sl"),
+                                )
+                    except Exception as e:
+                        logger.error(
+                            "Exception placing TP/SL for %s: %s", signal.symbol, e
+                        )
 
-            # Send trade executed notification
             try:
                 notification_service = NotificationService()
                 await notification_service.send_trade_executed(

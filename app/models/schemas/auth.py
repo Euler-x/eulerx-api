@@ -54,6 +54,7 @@ class UserResponse(BaseModel):
     email_verified: bool = False
     has_wallet: bool = False
     telegram_configured: bool = False
+    bybit_configured: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -98,3 +99,14 @@ class ResetPasswordRequest(BaseModel):
 
 class PasswordResetResponse(BaseModel):
     message: str
+
+
+class BybitConnectRequest(BaseModel):
+    api_key: str = Field(..., min_length=10, description="Bybit API key")
+    api_secret: str = Field(..., min_length=10, description="Bybit API secret")
+
+
+class BybitConnectResponse(BaseModel):
+    message: str
+    bybit_configured: bool
+    account_equity: float = 0.0

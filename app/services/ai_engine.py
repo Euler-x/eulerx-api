@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models.enums import SignalDirection, SignalStatus
+from app.models.enums import Exchange, SignalDirection, SignalStatus
 from app.models.signal import Signal
 from app.utils.helpers import calculate_risk_reward_ratio, utc_now
 
@@ -498,6 +498,13 @@ class AIEngineService:
             else:
                 sell_count += 1
 
+            # Determine which exchange this signal is from
+            exchange_str = symbol_data.get("exchange", Exchange.HYPERLIQUID.value)
+            try:
+                signal_exchange = Exchange(exchange_str)
+            except ValueError:
+                signal_exchange = Exchange.HYPERLIQUID
+
             signal = Signal(
                 symbol=symbol,
                 direction=aggregated["direction"],
@@ -510,6 +517,7 @@ class AIEngineService:
                 status=SignalStatus.NEW,
                 expires_at=utc_now() + signal_lifetime,
                 model_responses=aggregated["model_responses"],
+                exchange=signal_exchange,
             )
 
             db.add(signal)

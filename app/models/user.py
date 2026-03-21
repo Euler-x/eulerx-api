@@ -74,6 +74,12 @@ class User(Base, TimestampMixin):
     )
     telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    # Bybit API credentials (encrypted)
+    bybit_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bybit_api_secret_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
     # Notification preferences (JSON: {category}_{channel} -> bool)
     notification_preferences: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True
@@ -86,6 +92,10 @@ class User(Base, TimestampMixin):
     @property
     def telegram_configured(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def bybit_configured(self) -> bool:
+        return bool(self.bybit_api_key_encrypted and self.bybit_api_secret_encrypted)
 
     strategies: Mapped[list["Strategy"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

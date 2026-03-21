@@ -1173,6 +1173,7 @@ dependencies = [
     { name = "hyperliquid-python-sdk" },
     { name = "itsdangerous" },
     { name = "prometheus-fastapi-instrumentator" },
+    { name = "pybit" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
@@ -1211,6 +1212,7 @@ requires-dist = [
     { name = "hyperliquid-python-sdk", specifier = ">=0.8.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "prometheus-fastapi-instrumentator", specifier = ">=7.0.0" },
+    { name = "pybit", specifier = ">=5.8.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },
@@ -1993,6 +1995,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/2d/346e946d4951f37eca1e4f55be0f0174c52cd70720f84029b02f296f4a38/propcache-0.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:ecef2343af4cc68e05131e45024ba34f6095821988a9d0a02aa7c73fcc448aa9", size = 40428, upload-time = "2025-10-08T19:48:35.441Z" },
     { url = "https://files.pythonhosted.org/packages/5b/5a/bc7b4a4ef808fa59a816c17b20c4bef6884daebbdf627ff2a161da67da19/propcache-0.4.1-py3-none-any.whl", hash = "sha256:af2a6052aeb6cf17d3e46ee169099044fd8224cbaf75c76a2ef596e8163e2237", size = 13305, upload-time = "2025-10-08T19:49:00.792Z" },
 ]
+
+[[package]]
+name = "pybit"
+version = "5.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pycryptodome" },
+    { name = "requests" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ca/96/f81d7aa519d207eccfec98417081c7c007ad8a0a04b7a88dad4b9e56011e/pybit-5.14.0.tar.gz", hash = "sha256:18f58876585785648494697db2dd0ae9166930d408114b88f58b88c413a10b5a", size = 57301, upload-time = "2026-02-06T16:40:55.866Z" }
 
 [[package]]
 name = "pycparser"

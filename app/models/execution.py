@@ -18,7 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.types import GUID
 
 from app.db.base import Base
-from app.models.enums import ExecutionStatus, OrderType, SignalDirection
+from app.models.enums import Exchange, ExecutionStatus, OrderType, SignalDirection
 
 if TYPE_CHECKING:
     from app.models.signal import Signal
@@ -80,6 +80,17 @@ class Execution(Base):
         Numeric(precision=18, scale=8), nullable=True
     )
     tx_hash: Mapped[Optional[str]] = mapped_column(String(66), nullable=True)
+    exchange_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    exchange: Mapped[Exchange] = mapped_column(
+        SAEnum(
+            Exchange,
+            name="exchange_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        default=Exchange.HYPERLIQUID,
+        server_default="hyperliquid",
+        nullable=False,
+    )
     error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[ExecutionStatus] = mapped_column(
         SAEnum(

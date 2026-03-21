@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.types import GUID
 
 from app.db.base import Base, TimestampMixin
-from app.models.enums import SignalDirection, SignalStatus
+from app.models.enums import Exchange, SignalDirection, SignalStatus
 
 if TYPE_CHECKING:
     from app.models.execution import Execution
@@ -60,6 +60,17 @@ class Signal(Base, TimestampMixin):
     )
     expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    exchange: Mapped[Exchange] = mapped_column(
+        SAEnum(
+            Exchange,
+            name="exchange_enum",
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        default=Exchange.HYPERLIQUID,
+        server_default="hyperliquid",
+        nullable=False,
     )
     model_responses: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 

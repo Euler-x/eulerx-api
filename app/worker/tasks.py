@@ -35,8 +35,10 @@ from app.models.admin_config import AdminConfig
 from app.models.enums import SignalStatus, SubscriptionStatus
 from app.models.signal import Signal
 from app.models.strategy import Strategy
+from app.models.enums import Exchange
 from app.services.ai_engine import AIEngineService
 from app.services.ate import ATEService
+from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.services.notifications import NotificationService
 from app.utils.helpers import utc_now
@@ -50,13 +52,46 @@ settings = get_settings()
 
 
 async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid ranked by activity (price change + volume)."""
-    service = HyperliquidService()
-    symbols = await service.get_top_gainers(limit=settings.analysis_top_symbols_limit)
+    """Fetch market data from Hyperliquid AND Bybit, merge and return."""
+    limit = settings.analysis_top_symbols_limit
+
+    # Fetch from both exchanges in parallel
+    hl_service = HyperliquidService()
+    bybit_service = BybitService()
+
+    import asyncio
+
+    hl_task = hl_service.get_top_movers(limit=limit)
+    bybit_task = bybit_service.get_top_movers(limit=limit)
+
+    hl_results, bybit_results = await asyncio.gather(
+        hl_task, bybit_task, return_exceptions=True
+    )
+
+    symbols: list[dict] = []
+
+    if isinstance(hl_results, list):
+        for s in hl_results:
+            s["exchange"] = Exchange.HYPERLIQUID.value
+        symbols.extend(hl_results)
+        logger.info("Fetched %d symbols from Hyperliquid", len(hl_results))
+    else:
+        logger.error("Hyperliquid fetch failed: %s", hl_results)
+
+    if isinstance(bybit_results, list):
+        for s in bybit_results:
+            s["exchange"] = Exchange.BYBIT.value
+        symbols.extend(bybit_results)
+        logger.info("Fetched %d symbols from Bybit", len(bybit_results))
+    else:
+        logger.error("Bybit fetch failed: %s", bybit_results)
+
     logger.info(
-        "Fetched top %d symbols: %s",
+        "Total %d symbols from both exchanges: %s",
         len(symbols),
-        ", ".join(s.get("symbol", "?") for s in symbols),
+        ", ".join(
+            f"{s.get('symbol', '?')}({s.get('exchange', '?')})" for s in symbols[:10]
+        ),
     )
     return symbols
 
