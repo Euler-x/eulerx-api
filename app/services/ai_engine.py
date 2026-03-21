@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.models.bybit_signal import BybitSignal
 from app.models.enums import Exchange, SignalDirection, SignalStatus
 from app.models.signal import Signal
 from app.utils.helpers import calculate_risk_reward_ratio, utc_now
@@ -361,19 +362,32 @@ class AIEngineService:
     async def _get_active_signal_keys(self, db: AsyncSession) -> set[tuple[str, str]]:
         """Return (symbol, exchange) pairs that still have an active signal.
 
-        Uses exchange-aware dedup so HL "BTC" and Bybit "BTCUSDT" are
-        tracked independently.
+        Queries both Signal (HL) and BybitSignal tables.
         """
         now = utc_now()
-        query = select(Signal.symbol, Signal.exchange).where(
-            Signal.status == SignalStatus.NEW,
-            Signal.expires_at > now,
+        keys: set[tuple[str, str]] = set()
+
+        # HL signals
+        hl_result = await db.execute(
+            select(Signal.symbol).where(
+                Signal.status == SignalStatus.NEW,
+                Signal.expires_at > now,
+            )
         )
-        result = await db.execute(query)
-        return {
-            (row[0], row[1].value if hasattr(row[1], "value") else str(row[1]))
-            for row in result.all()
-        }
+        for row in hl_result.all():
+            keys.add((row[0], "hyperliquid"))
+
+        # Bybit signals
+        bb_result = await db.execute(
+            select(BybitSignal.symbol).where(
+                BybitSignal.status == SignalStatus.NEW,
+                BybitSignal.expires_at > now,
+            )
+        )
+        for row in bb_result.all():
+            keys.add((row[0], "bybit"))
+
+        return keys
 
     async def generate_signals(
         self,
@@ -508,14 +522,9 @@ class AIEngineService:
             else:
                 sell_count += 1
 
-            # Determine which exchange this signal is from
-            exchange_str = symbol_data.get("exchange", Exchange.HYPERLIQUID.value)
-            try:
-                signal_exchange = Exchange(exchange_str)
-            except ValueError:
-                signal_exchange = Exchange.HYPERLIQUID
-
-            signal = Signal(
+            # Create the right signal model based on exchange
+            is_bybit = exchange_str == Exchange.BYBIT.value
+            signal_kwargs = dict(
                 symbol=symbol,
                 direction=aggregated["direction"],
                 confidence=aggregated["confidence"],
@@ -527,8 +536,12 @@ class AIEngineService:
                 status=SignalStatus.NEW,
                 expires_at=utc_now() + signal_lifetime,
                 model_responses=aggregated["model_responses"],
-                exchange=signal_exchange,
             )
+
+            if is_bybit:
+                signal = BybitSignal(**signal_kwargs)
+            else:
+                signal = Signal(**signal_kwargs)
 
             db.add(signal)
             generated_signals.append(signal)

@@ -106,12 +106,14 @@ async def _get_active_strategy_ids_async() -> list[str]:
         return [str(sid) for sid in rows]
 
 
-async def _generate_signals_async(market_data: list[dict]) -> list[str]:
+async def _generate_signals_async(market_data: list[dict]) -> list[dict]:
     """Generate strategy-independent signals from market data.
 
     Pure market analysis — no strategy context involved.
-    Returns list of signal IDs.
+    Returns list of dicts with signal ID and exchange.
     """
+    from app.models.bybit_signal import BybitSignal
+
     ai_engine = AIEngineService()
 
     async with async_session_factory() as session:
@@ -123,9 +125,12 @@ async def _generate_signals_async(market_data: list[dict]) -> list[str]:
 
             if signals:
                 await session.commit()
-                generated_ids = [str(s.id) for s in signals]
+                result = []
+                for s in signals:
+                    exchange = "bybit" if isinstance(s, BybitSignal) else "hyperliquid"
+                    result.append({"id": str(s.id), "exchange": exchange})
                 logger.info("Generated %d signals", len(signals))
-                return generated_ids
+                return result
 
             logger.info("No actionable signals from market data")
             return []
@@ -144,7 +149,9 @@ async def _is_trading_halted(session) -> bool:
     return bool(config and config.value.get("halted"))
 
 
-async def _execute_signal_for_strategy_async(signal_id: str, strategy_id: str) -> dict:
+async def _execute_signal_for_strategy_async(
+    signal_id: str, strategy_id: str, exchange: str = "hyperliquid"
+) -> dict:
     """Execute a single signal for a specific strategy via ATE.
 
     Strategy provides risk management context (position sizing, drawdown,
@@ -158,9 +165,14 @@ async def _execute_signal_for_strategy_async(signal_id: str, strategy_id: str) -
             if await _is_trading_halted(session):
                 return {"status": "skipped", "reason": "Trading is halted"}
 
-            # Load signal
+            # Load signal from the correct table
+            from app.models.bybit_signal import BybitSignal
+
+            is_bybit_signal = exchange == "bybit"
+            SignalModel = BybitSignal if is_bybit_signal else Signal
+
             signal_result = await session.execute(
-                select(Signal).where(Signal.id == uuid.UUID(signal_id))
+                select(SignalModel).where(SignalModel.id == uuid.UUID(signal_id))
             )
             signal = signal_result.scalar_one_or_none()
             if signal is None:
@@ -188,10 +200,9 @@ async def _execute_signal_for_strategy_async(signal_id: str, strategy_id: str) -
 
             # Check exchange compatibility — skip early without creating
             # a failed execution record (avoids DB noise)
-            signal_exchange = getattr(signal, "exchange", Exchange.HYPERLIQUID)
-            if signal_exchange == Exchange.BYBIT and not user.bybit_configured:
+            if is_bybit_signal and not user.bybit_configured:
                 return {"status": "skipped", "reason": "User has no Bybit keys"}
-            if signal_exchange == Exchange.HYPERLIQUID and not user.wallet_address:
+            if not is_bybit_signal and not user.wallet_address:
                 return {"status": "skipped", "reason": "User has no HL wallet"}
 
             # Verify user has ATE access via subscription
@@ -352,6 +363,7 @@ def execute_signal_task(
     self,
     signal_id: str,
     strategy_id: str,
+    exchange: str = "hyperliquid",
 ) -> dict:
     """Execute a single signal for a strategy via the ATE. Stage 3 of pipeline.
 
@@ -359,7 +371,9 @@ def execute_signal_task(
     ATE checks signal.status == NEW for idempotency.
     """
     try:
-        return run_async(_execute_signal_for_strategy_async(signal_id, strategy_id))
+        return run_async(
+            _execute_signal_for_strategy_async(signal_id, strategy_id, exchange)
+        )
     except SoftTimeLimitExceeded:
         logger.error("execute_signal_task(%s) hit soft time limit", signal_id)
         raise
@@ -462,17 +476,26 @@ def run_analysis_pipeline(self) -> dict:
         total_executions = 0
 
         for strategy_id in active_strategy_ids:
-            for signal_id in signal_ids:
+            for sig_info in signal_ids:
+                sig_id = sig_info["id"] if isinstance(sig_info, dict) else sig_info
+                sig_exchange = (
+                    sig_info.get("exchange", "hyperliquid")
+                    if isinstance(sig_info, dict)
+                    else "hyperliquid"
+                )
                 try:
                     result = run_async(
-                        _execute_signal_for_strategy_async(signal_id, strategy_id)
+                        _execute_signal_for_strategy_async(
+                            sig_id, strategy_id, exchange=sig_exchange
+                        )
                     )
                     if result.get("status") in ("filled", "FILLED"):
                         total_executions += 1
                     logger.info(
-                        "[Pipeline %s] Signal %s / Strategy %s: %s",
+                        "[Pipeline %s] Signal %s(%s) / Strategy %s: %s",
                         pipeline_id,
-                        signal_id,
+                        sig_id,
+                        sig_exchange,
                         strategy_id,
                         result,
                     )
@@ -480,7 +503,7 @@ def run_analysis_pipeline(self) -> dict:
                     logger.error(
                         "[Pipeline %s] Execution failed for signal %s strategy %s: %s",
                         pipeline_id,
-                        signal_id,
+                        sig_id,
                         strategy_id,
                         exc,
                     )

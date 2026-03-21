@@ -21,6 +21,7 @@ from app.db.base import Base
 from app.models.enums import Exchange, ExecutionStatus, OrderType, SignalDirection
 
 if TYPE_CHECKING:
+    from app.models.bybit_signal import BybitSignal
     from app.models.signal import Signal
     from app.models.strategy import Strategy
     from app.models.user import User
@@ -30,10 +31,16 @@ class Execution(Base):
     __tablename__ = "executions"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    signal_id: Mapped[uuid.UUID] = mapped_column(
+    signal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("signals.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    bybit_signal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(),
+        ForeignKey("bybit_signals.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -108,7 +115,11 @@ class Execution(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    signal: Mapped["Signal"] = relationship(back_populates="executions")
+    signal: Mapped[Optional["Signal"]] = relationship(back_populates="executions")
+    bybit_signal: Mapped[Optional["BybitSignal"]] = relationship(
+        back_populates="executions",
+        foreign_keys=[bybit_signal_id],
+    )
     user: Mapped["User"] = relationship(back_populates="executions")
     strategy: Mapped["Strategy"] = relationship(back_populates="executions")
 

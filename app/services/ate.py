@@ -13,6 +13,7 @@ from app.models.enums import (
     SignalDirection,
     SignalStatus,
 )
+from app.models.bybit_signal import BybitSignal
 from app.models.execution import Execution
 from app.models.signal import Signal
 from app.models.strategy import Strategy
@@ -216,15 +217,17 @@ class ATEService:
 
     def _create_failed_execution(
         self,
-        signal: Signal,
+        signal: Signal | BybitSignal,
         user: User,
         strategy: Strategy,
         error_message: str,
         entry_price: float | None = None,
     ) -> Execution:
         """Create a FAILED execution record with an error message."""
+        is_bb = isinstance(signal, BybitSignal)
         return Execution(
-            signal_id=signal.id,
+            signal_id=None if is_bb else signal.id,
+            bybit_signal_id=signal.id if is_bb else None,
             user_id=user.id,
             strategy_id=strategy.id,
             wallet_address_hash=user.wallet_address_hash
@@ -235,13 +238,14 @@ class ATEService:
             quantity=0,
             leverage=strategy.leverage_limit or settings.ate_default_leverage,
             status=ExecutionStatus.FAILED,
+            exchange=Exchange.BYBIT if is_bb else Exchange.HYPERLIQUID,
             error_message=error_message[:500],
         )
 
     async def execute_signal(
         self,
         db: AsyncSession,
-        signal: Signal,
+        signal: Signal | BybitSignal,
         strategy: Strategy,
         user: User,
     ) -> Execution | None:
@@ -268,8 +272,8 @@ class ATEService:
             return None
 
         # ── Determine exchange for this signal ─────────────────────────
-        signal_exchange = getattr(signal, "exchange", Exchange.HYPERLIQUID)
-        is_bybit = signal_exchange == Exchange.BYBIT
+        is_bybit = isinstance(signal, BybitSignal)
+        signal_exchange = Exchange.BYBIT if is_bybit else Exchange.HYPERLIQUID
 
         # ── Pre-execution wallet/key checks ───────────────────────────
         if is_bybit:
@@ -392,8 +396,10 @@ class ATEService:
         is_buy = signal.direction == SignalDirection.BUY
 
         # Create execution record (idempotency: unique signal_id + strategy_id)
+        is_bb_signal = isinstance(signal, BybitSignal)
         execution = Execution(
-            signal_id=signal.id,
+            signal_id=None if is_bb_signal else signal.id,
+            bybit_signal_id=signal.id if is_bb_signal else None,
             user_id=user.id,
             strategy_id=strategy.id,
             wallet_address_hash=user.wallet_address_hash

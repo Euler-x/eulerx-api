@@ -43,6 +43,7 @@ from app.models.enums import (  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.strategy import Strategy  # noqa: F401
 from app.models.signal import Signal  # noqa: F401
+from app.models.bybit_signal import BybitSignal  # noqa: F401
 from app.models.execution import Execution  # noqa: F401
 from app.models.transaction import Transaction  # noqa: F401
 from app.models.billing import Payment, Plan, Subscription  # noqa: F401
