@@ -167,7 +167,8 @@ async def test_generate_signals_creates_signals(setup_db):
         result = await _generate_signals_async(market_data)
 
     assert len(result) == 1
-    assert result[0] == str(mock_signal.id)
+    assert result[0]["id"] == str(mock_signal.id)
+    assert result[0]["exchange"] == "hyperliquid"
 
 
 @pytest.mark.asyncio
@@ -516,10 +517,17 @@ async def test_run_analysis_pipeline_no_market_data(setup_db):
     """Pipeline returns early when no market data available."""
     from app.worker.tasks import _fetch_market_data_async
 
-    with patch(
-        "app.worker.tasks.HyperliquidService.get_top_gainers",
-        new_callable=AsyncMock,
-        return_value=[],
+    with (
+        patch(
+            "app.worker.tasks.HyperliquidService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "app.worker.tasks.BybitService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         result = await _fetch_market_data_async()
 
