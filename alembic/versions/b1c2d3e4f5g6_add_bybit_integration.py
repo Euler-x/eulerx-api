@@ -8,6 +8,7 @@ Create Date: 2026-03-21
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 revision = "b1c2d3e4f5g6"
 down_revision = "e9f8a7b6c5d4"
@@ -15,11 +16,14 @@ branch_labels = None
 depends_on = None
 
 exchange_enum = sa.Enum("hyperliquid", "bybit", name="exchange_enum")
-# These enums already exist in the DB — reference without creating
-signal_direction_enum = sa.Enum(
+
+# These PG enums already exist from earlier migrations.
+# Use postgresql.ENUM with create_type=False so create_table
+# does NOT attempt to issue CREATE TYPE again.
+direction_col_type = postgresql.ENUM(
     "buy", "sell", "hold", name="signal_direction_enum", create_type=False
 )
-signal_status_enum = sa.Enum(
+status_col_type = postgresql.ENUM(
     "new",
     "executing",
     "filled",
@@ -31,7 +35,7 @@ signal_status_enum = sa.Enum(
 
 
 def upgrade() -> None:
-    # Create the exchange enum type
+    # Create the exchange enum type (new)
     exchange_enum.create(op.get_bind(), checkfirst=True)
 
     # ── User: Bybit API credentials ────────────────────────────────
@@ -53,14 +57,14 @@ def upgrade() -> None:
         "bybit_signals",
         sa.Column("id", sa.Uuid(), primary_key=True),
         sa.Column("symbol", sa.String(30), nullable=False, index=True),
-        sa.Column("direction", signal_direction_enum, nullable=False),
+        sa.Column("direction", direction_col_type, nullable=False),
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("entry_price", sa.Numeric(18, 8), nullable=False),
         sa.Column("stop_loss", sa.Numeric(18, 8), nullable=True),
         sa.Column("take_profit", sa.Numeric(18, 8), nullable=True),
         sa.Column("risk_reward_ratio", sa.Float(), nullable=True),
         sa.Column("indicators", sa.JSON(), nullable=True),
-        sa.Column("status", signal_status_enum, nullable=False, server_default="new"),
+        sa.Column("status", status_col_type, nullable=False, server_default="new"),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("model_responses", sa.JSON(), nullable=True),
         sa.Column(
