@@ -43,6 +43,7 @@ async def pipeline_fixtures(setup_db):
     async with TestSessionFactory() as session:
         user = User(
             id=user_id,
+            wallet_address="0x" + "ab" * 20,
             wallet_address_hash="p" * 64,
             wallet_type=WalletType.GENERATED,
             encrypted_private_key=encrypt_private_key("0x" + "a" * 64),
@@ -93,21 +94,33 @@ async def test_fetch_market_data(setup_db):
     """_fetch_market_data_async returns symbols from Hyperliquid."""
     from app.worker.tasks import _fetch_market_data_async
 
-    mock_data = [
+    mock_hl = [
         {"symbol": "BTC", "price": "50000", "change_24h": "5.2"},
         {"symbol": "ETH", "price": "3000", "change_24h": "3.1"},
     ]
+    mock_bybit = [
+        {"symbol": "BTCUSDT", "price": "50000"},
+    ]
 
-    with patch(
-        "app.worker.tasks.HyperliquidService.get_top_gainers",
-        new_callable=AsyncMock,
-        return_value=mock_data,
+    with (
+        patch(
+            "app.worker.tasks.HyperliquidService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=mock_hl,
+        ),
+        patch(
+            "app.worker.tasks.BybitService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=mock_bybit,
+        ),
     ):
         result = await _fetch_market_data_async()
 
-    assert len(result) == 2
+    assert len(result) == 3
     assert result[0]["symbol"] == "BTC"
-    assert result[1]["symbol"] == "ETH"
+    assert result[0]["exchange"] == "hyperliquid"
+    assert result[2]["symbol"] == "BTCUSDT"
+    assert result[2]["exchange"] == "bybit"
 
 
 # ── Test: Get Active Strategy IDs ──────────────────────────────────
