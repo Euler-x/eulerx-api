@@ -15,9 +15,18 @@ branch_labels = None
 depends_on = None
 
 exchange_enum = sa.Enum("hyperliquid", "bybit", name="exchange_enum")
-signal_direction_enum = sa.Enum("buy", "sell", "hold", name="signal_direction_enum")
+# These enums already exist in the DB — reference without creating
+signal_direction_enum = sa.Enum(
+    "buy", "sell", "hold", name="signal_direction_enum", create_type=False
+)
 signal_status_enum = sa.Enum(
-    "new", "executing", "filled", "expired", "cancelled", name="signal_status_enum"
+    "new",
+    "executing",
+    "filled",
+    "expired",
+    "cancelled",
+    name="signal_status_enum",
+    create_type=False,
 )
 
 
