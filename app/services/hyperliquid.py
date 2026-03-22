@@ -255,10 +255,12 @@ class HyperliquidService:
             if not coin:
                 return
             try:
-                # Fetch both 1h (24h) and 4h (72h) candles
-                candles_1h, candles_4h = await asyncio.gather(
+                # Fetch 4 timeframes: 4h (trend), 1h (confirmation), 15m (entry zone), 5m (trigger)
+                candles_1h, candles_4h, candles_15m, candles_5m = await asyncio.gather(
                     self.get_candles(coin, interval="1h", hours=24),
                     self.get_candles(coin, interval="4h", hours=72),
+                    self.get_candles(coin, interval="15m", hours=6),
+                    self.get_candles(coin, interval="5m", hours=3),
                 )
 
                 if not candles_1h:
@@ -464,6 +466,109 @@ class HyperliquidService:
                 else:
                     bb_position = "unknown"
 
+                # ── 15m Entry Zone Analysis ────────────────────────
+                ltf_15m_support = None
+                ltf_15m_resistance = None
+                ltf_15m_trend = "unknown"
+                ltf_15m_rsi = None
+                if candles_15m and len(candles_15m) >= 6:
+                    m15_closes = [float(c["c"]) for c in candles_15m]
+                    m15_highs = [float(c["h"]) for c in candles_15m]
+                    m15_lows = [float(c["l"]) for c in candles_15m]
+
+                    m15_levels = _find_key_levels(m15_highs, m15_lows, m15_closes)
+                    ltf_15m_support = m15_levels["nearest_support"]
+                    ltf_15m_resistance = m15_levels["nearest_resistance"]
+
+                    # 15m trend structure
+                    r_highs = m15_highs[-8:]
+                    r_lows = m15_lows[-8:]
+                    hh15 = sum(
+                        1 for i in range(1, len(r_highs)) if r_highs[i] > r_highs[i - 1]
+                    )
+                    hl15 = sum(
+                        1 for i in range(1, len(r_lows)) if r_lows[i] > r_lows[i - 1]
+                    )
+                    if hh15 >= 4 and hl15 >= 4:
+                        ltf_15m_trend = "bullish"
+                    elif hh15 <= 2 and hl15 <= 2:
+                        ltf_15m_trend = "bearish"
+                    else:
+                        ltf_15m_trend = "ranging"
+
+                    # 15m RSI
+                    rsi_p15 = min(14, len(m15_closes) - 1)
+                    if rsi_p15 >= 2:
+                        g15, l15 = [], []
+                        for i in range(len(m15_closes) - rsi_p15, len(m15_closes)):
+                            d = m15_closes[i] - m15_closes[i - 1]
+                            g15.append(max(d, 0))
+                            l15.append(max(-d, 0))
+                        ag15 = sum(g15) / len(g15) if g15 else 0
+                        al15 = sum(l15) / len(l15) if l15 else 1
+                        rs15 = ag15 / al15 if al15 > 0 else 100
+                        ltf_15m_rsi = round(100 - (100 / (1 + rs15)), 1)
+
+                # ── 5m Entry Trigger Analysis ─────────────────────
+                ltf_5m_trend = "unknown"
+                ltf_5m_rsi = None
+                ltf_5m_last_3_candles = "neutral"
+                ltf_5m_atr_pct = None
+                if candles_5m and len(candles_5m) >= 6:
+                    m5_closes = [float(c["c"]) for c in candles_5m]
+                    m5_highs = [float(c["h"]) for c in candles_5m]
+                    m5_lows = [float(c["l"]) for c in candles_5m]
+                    m5_opens = [float(c["o"]) for c in candles_5m]
+
+                    # 5m trend (last 12 candles = 1 hour)
+                    rc5 = m5_closes[-12:] if len(m5_closes) >= 12 else m5_closes
+                    up5 = sum(1 for i in range(1, len(rc5)) if rc5[i] > rc5[i - 1])
+                    total5 = len(rc5) - 1
+                    if total5 > 0 and up5 / total5 >= 0.65:
+                        ltf_5m_trend = "bullish"
+                    elif total5 > 0 and up5 / total5 <= 0.35:
+                        ltf_5m_trend = "bearish"
+                    else:
+                        ltf_5m_trend = "mixed"
+
+                    # 5m RSI
+                    rsi_p5 = min(14, len(m5_closes) - 1)
+                    if rsi_p5 >= 2:
+                        g5, l5 = [], []
+                        for i in range(len(m5_closes) - rsi_p5, len(m5_closes)):
+                            d = m5_closes[i] - m5_closes[i - 1]
+                            g5.append(max(d, 0))
+                            l5.append(max(-d, 0))
+                        ag5 = sum(g5) / len(g5) if g5 else 0
+                        al5 = sum(l5) / len(l5) if l5 else 1
+                        rs5 = ag5 / al5 if al5 > 0 else 100
+                        ltf_5m_rsi = round(100 - (100 / (1 + rs5)), 1)
+
+                    # Last 3 candles pattern (bullish/bearish engulfing-like)
+                    if len(m5_closes) >= 3:
+                        last3_bullish = sum(
+                            1 for i in range(-3, 0) if m5_closes[i] > m5_opens[i]
+                        )
+                        if last3_bullish >= 2:
+                            ltf_5m_last_3_candles = "bullish"
+                        elif last3_bullish <= 0:
+                            ltf_5m_last_3_candles = "bearish"
+
+                    # 5m ATR for tight SL
+                    m5_atr_vals = []
+                    for i in range(1, len(candles_5m)):
+                        tr5 = max(
+                            m5_highs[i] - m5_lows[i],
+                            abs(m5_highs[i] - m5_closes[i - 1]),
+                            abs(m5_lows[i] - m5_closes[i - 1]),
+                        )
+                        m5_atr_vals.append(tr5)
+                    if m5_atr_vals:
+                        m5_atr = sum(m5_atr_vals[-14:]) / min(14, len(m5_atr_vals))
+                        ltf_5m_atr_pct = round(
+                            (m5_atr / close_latest * 100) if close_latest > 0 else 0, 3
+                        )
+
                 sym["candle_summary"] = {
                     "high_24h": round(high_24h, 4),
                     "low_24h": round(low_24h, 4),
@@ -485,6 +590,16 @@ class HyperliquidService:
                     "volume_trend": volume_trend,
                     "rejection_signal": rejection_signal,
                     "bb_position": bb_position,
+                    # 15m entry zone
+                    "ltf_15m_support": ltf_15m_support,
+                    "ltf_15m_resistance": ltf_15m_resistance,
+                    "ltf_15m_trend": ltf_15m_trend,
+                    "ltf_15m_rsi": ltf_15m_rsi,
+                    # 5m entry trigger
+                    "ltf_5m_trend": ltf_5m_trend,
+                    "ltf_5m_rsi": ltf_5m_rsi,
+                    "ltf_5m_candle_pattern": ltf_5m_last_3_candles,
+                    "ltf_5m_atr_pct": ltf_5m_atr_pct,
                 }
             except Exception as e:
                 logger.warning(f"Failed to fetch candles for {coin}: {e}")

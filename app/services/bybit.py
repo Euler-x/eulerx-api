@@ -206,9 +206,11 @@ class BybitService:
             if not symbol:
                 return
             try:
-                candles_1h, candles_4h = await asyncio.gather(
+                candles_1h, candles_4h, candles_15m, candles_5m = await asyncio.gather(
                     self.get_candles(symbol, interval="60", limit=24),
                     self.get_candles(symbol, interval="240", limit=18),
+                    self.get_candles(symbol, interval="15", limit=24),
+                    self.get_candles(symbol, interval="5", limit=36),
                 )
                 if not candles_1h:
                     return
@@ -390,6 +392,103 @@ class BybitService:
                 else:
                     bb_position = "unknown"
 
+                # ── 15m + 5m lower TF analysis ─────────────────────
+                def _compute_rsi(closes_list, period=14):
+                    p = min(period, len(closes_list) - 1)
+                    if p < 2:
+                        return None
+                    g, lo = [], []
+                    for idx in range(len(closes_list) - p, len(closes_list)):
+                        d = closes_list[idx] - closes_list[idx - 1]
+                        g.append(max(d, 0))
+                        lo.append(max(-d, 0))
+                    ag = sum(g) / len(g) if g else 0
+                    al = sum(lo) / len(lo) if lo else 1
+                    rs = ag / al if al > 0 else 100
+                    return round(100 - (100 / (1 + rs)), 1)
+
+                ltf_15m_support = None
+                ltf_15m_resistance = None
+                ltf_15m_trend = "unknown"
+                ltf_15m_rsi = None
+                if candles_15m and len(candles_15m) >= 6:
+                    m15c = [float(c["c"]) for c in candles_15m]
+                    m15h = [float(c["h"]) for c in candles_15m]
+                    m15l = [float(c["l"]) for c in candles_15m]
+                    # Support/resistance from 15m swings
+                    s_highs = [
+                        m15h[i]
+                        for i in range(1, len(m15h) - 1)
+                        if m15h[i] > m15h[i - 1] and m15h[i] > m15h[i + 1]
+                    ]
+                    s_lows = [
+                        m15l[i]
+                        for i in range(1, len(m15l) - 1)
+                        if m15l[i] < m15l[i - 1] and m15l[i] < m15l[i + 1]
+                    ]
+                    res_above = sorted([s for s in s_highs if s > close_latest])
+                    sup_below = sorted(
+                        [s for s in s_lows if s < close_latest], reverse=True
+                    )
+                    ltf_15m_resistance = round(res_above[0], 4) if res_above else None
+                    ltf_15m_support = round(sup_below[0], 4) if sup_below else None
+                    # Trend
+                    rh = m15h[-8:]
+                    rl = m15l[-8:]
+                    hh15 = sum(1 for i in range(1, len(rh)) if rh[i] > rh[i - 1])
+                    hl15 = sum(1 for i in range(1, len(rl)) if rl[i] > rl[i - 1])
+                    ltf_15m_trend = (
+                        "bullish"
+                        if hh15 >= 4 and hl15 >= 4
+                        else "bearish"
+                        if hh15 <= 2 and hl15 <= 2
+                        else "ranging"
+                    )
+                    ltf_15m_rsi = _compute_rsi(m15c)
+
+                ltf_5m_trend = "unknown"
+                ltf_5m_rsi = None
+                ltf_5m_pattern = "neutral"
+                ltf_5m_atr_pct = None
+                if candles_5m and len(candles_5m) >= 6:
+                    m5c = [float(c["c"]) for c in candles_5m]
+                    m5h = [float(c["h"]) for c in candles_5m]
+                    m5l = [float(c["l"]) for c in candles_5m]
+                    m5o = [float(c["o"]) for c in candles_5m]
+                    rc5 = m5c[-12:] if len(m5c) >= 12 else m5c
+                    up5 = sum(1 for i in range(1, len(rc5)) if rc5[i] > rc5[i - 1])
+                    t5 = len(rc5) - 1
+                    ltf_5m_trend = (
+                        "bullish"
+                        if t5 > 0 and up5 / t5 >= 0.65
+                        else "bearish"
+                        if t5 > 0 and up5 / t5 <= 0.35
+                        else "mixed"
+                    )
+                    ltf_5m_rsi = _compute_rsi(m5c)
+                    if len(m5c) >= 3:
+                        b3 = sum(1 for i in range(-3, 0) if m5c[i] > m5o[i])
+                        ltf_5m_pattern = (
+                            "bullish"
+                            if b3 >= 2
+                            else "bearish"
+                            if b3 <= 0
+                            else "neutral"
+                        )
+                    m5_atr_vals = []
+                    for i in range(1, len(candles_5m)):
+                        tr5 = max(
+                            m5h[i] - m5l[i],
+                            abs(m5h[i] - m5c[i - 1]),
+                            abs(m5l[i] - m5c[i - 1]),
+                        )
+                        m5_atr_vals.append(tr5)
+                    if m5_atr_vals:
+                        m5_atr = sum(m5_atr_vals[-14:]) / min(14, len(m5_atr_vals))
+                        ltf_5m_atr_pct = round(
+                            (m5_atr / close_latest * 100) if close_latest > 0 else 0, 3
+                        )
+
                 sym["candle_summary"] = {
                     "high_24h": round(high_24h, 4),
                     "low_24h": round(low_24h, 4),
@@ -410,6 +509,16 @@ class BybitService:
                     "volume_trend": volume_trend,
                     "rejection_signal": rejection_signal,
                     "bb_position": bb_position,
+                    # 15m entry zone
+                    "ltf_15m_support": ltf_15m_support,
+                    "ltf_15m_resistance": ltf_15m_resistance,
+                    "ltf_15m_trend": ltf_15m_trend,
+                    "ltf_15m_rsi": ltf_15m_rsi,
+                    # 5m entry trigger
+                    "ltf_5m_trend": ltf_5m_trend,
+                    "ltf_5m_rsi": ltf_5m_rsi,
+                    "ltf_5m_candle_pattern": ltf_5m_pattern,
+                    "ltf_5m_atr_pct": ltf_5m_atr_pct,
                 }
             except Exception as e:
                 logger.warning("Failed to fetch Bybit candles for %s: %s", symbol, e)

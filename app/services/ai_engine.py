@@ -36,6 +36,9 @@ Exhaustion & Mean-Reversion Indicators:
 Key Levels:
 {key_levels}
 
+Lower Timeframe Entry Data (15m + 5m):
+{ltf_entry_summary}
+
 Full Context: {context}
 
 Respond ONLY with valid JSON (no markdown, no explanation):
@@ -75,38 +78,53 @@ MANDATORY RULES — you must follow ALL of these IN ORDER:
    - Extreme positive funding rate (> 0.01%) = crowded longs, favor SELL or HOLD
    - Extreme negative funding rate (< -0.01%) = crowded shorts, favor BUY or HOLD
 
-1. HIGHER TIMEFRAME ALIGNMENT:
-   - BUY only when 4h trend is "bullish" or "ranging" — NEVER buy into a bearish 4h trend
-   - SELL only when 4h trend is "bearish" or "ranging" — NEVER sell into a bullish 4h trend
-   - EXCEPTION: If the asset is overextended (Rule 0), a COUNTER-TREND trade against
-     the 4h trend is acceptable if exhaustion indicators confirm (declining volume + wick
-     rejection + extreme RSI)
-   - If the 4h trend contradicts the 1h signal and no exhaustion is present, output HOLD
+1. MULTI-TIMEFRAME ALIGNMENT (4h → 1h → 15m → 5m):
+   Step 1 — 4h TREND DIRECTION (bias):
+   - 4h bullish (higher highs + higher lows) → only look for BUY setups
+   - 4h bearish (lower highs + lower lows) → only look for SELL setups
+   - 4h ranging → either direction is acceptable if lower TFs confirm
+   - EXCEPTION: Counter-trend allowed ONLY if asset is overextended (Rule 0) with exhaustion
 
-2. STOP LOSS PLACEMENT (critical for survival):
-   - Place stop loss BEHIND the nearest key level (support for BUY, resistance for SELL)
-   - BUY stop loss must be BELOW the nearest support level — not at or above it
-   - SELL stop loss must be ABOVE the nearest resistance level — not at or below it
-   - Minimum SL distance: 1.5x the ATR (use ATR % provided) — this avoids wick-hunts
-   - If no clear support/resistance exists, use 2-3% from entry as SL
-   - NEVER use a stop loss tighter than 1.5% — crypto wicks will hunt it
+   Step 2 — 1h TREND CONFIRMATION:
+   - 1h trend must align with 4h bias (both bullish for BUY, both bearish for SELL)
+   - If 1h and 4h conflict and no exhaustion setup → HOLD
+   - 1h RSI confirms momentum is not exhausted in the trade direction
+
+   Step 3 — 15m ENTRY ZONE:
+   - Price must be at or near a 15m key level (15m support for BUY, 15m resistance for SELL)
+   - 15m trend should align OR be showing a pullback into the zone
+   - If price is mid-range on 15m with no level test → HOLD
+
+   Step 4 — 5m ENTRY TRIGGER:
+   - 5m trend must start turning in the trade direction (bullish for BUY, bearish for SELL)
+   - 5m last 3 candles pattern must confirm: "bullish" for BUY, "bearish" for SELL
+   - If 5m shows no trigger (mixed candles, wrong direction) → HOLD
+   - ALL 4 timeframes must align before taking a trade
+
+2. STOP LOSS PLACEMENT (use lower TF structure for tighter SL):
+   - Place stop loss BEHIND the 15m key level (15m support for BUY, 15m resistance for SELL)
+   - BUY SL: below the 15m support level by 1x the 5m ATR
+   - SELL SL: above the 15m resistance level by 1x the 5m ATR
+   - This gives a tighter SL than using 1h structure, improving R:R
+   - If 5m ATR is available, use it for SL padding. Otherwise use 0.5-1% from 15m level
+   - Minimum SL distance: 0.5% (5m structure allows tighter stops)
+   - Maximum SL distance: 2% (if wider than this, the setup is too risky)
 
 3. TAKE PROFIT:
    - Risk:reward ratio must be at least 2.5:1 (TP distance >= 2.5x SL distance)
-   - Target the nearest resistance (for BUY) or support (for SELL) as first TP
-   - For mean-reversion trades: target the SMA20 or middle of the range as TP
-   - If the nearest level doesn't offer 2.5:1 R:R, signal HOLD
+   - Target the nearest 1h resistance (for BUY) or 1h support (for SELL)
+   - For mean-reversion trades: target SMA20 or middle of the 1h range
+   - With tighter SL from 15m/5m structure, 2.5:1 R:R is more achievable
+   - If the nearest 1h level doesn't offer 2.5:1 R:R, signal HOLD
 
-4. ENTRY QUALITY:
-   - For TREND-FOLLOWING entries:
-     BUY only if RSI < 55, SELL only if RSI > 45
-   - For MEAN-REVERSION entries (after overextension):
-     BUY only if RSI < 35 (oversold), SELL only if RSI > 65 (overbought)
-   - If 24h change > +5%: BUY requires RSI < 40 (stricter — asset already ran)
-   - If 24h change < -5%: SELL requires RSI > 60 (stricter — asset already fell)
-   - 4h RSI should confirm: avoid BUY if 4h RSI > 70, avoid SELL if 4h RSI < 30
+4. ENTRY QUALITY FILTERS:
+   - 4h RSI: avoid BUY if > 70, avoid SELL if < 30 (overextended on HTF)
+   - 1h RSI: BUY only if < 55, SELL only if > 45
+   - 15m RSI: BUY only if < 60 (not overbought on entry TF), SELL only if > 40
+   - If 24h change > +5%: BUY requires 1h RSI < 40 (asset already ran up)
+   - If 24h change < -5%: SELL requires 1h RSI > 60 (asset already fell)
    - Volume must be normal or high — avoid low-volume setups
-   - Price should be near a key level (within 1.5% of support for BUY, resistance for SELL)
+   - 5m candle pattern must confirm direction (bullish candles for BUY, bearish for SELL)
 
 5. CONFIDENCE SCORING:
    - 0.85+: Strong multi-timeframe alignment, clear level, volume confirms
@@ -174,20 +192,35 @@ class AIEngineService:
                 f"({'crowded longs — contrarian SHORT signal' if funding > 0.01 else 'crowded shorts — contrarian BUY signal' if funding < -0.01 else 'neutral'})"
             )
 
-            # Key levels
+            # Key levels (1h)
             support = candle.get("nearest_support")
             resistance = candle.get("nearest_resistance")
             level_lines = (
-                f"- Nearest Support: ${support if support else 'none identified'}\n"
-                f"- Nearest Resistance: ${resistance if resistance else 'none identified'}\n"
+                f"- 1h Support: ${support if support else 'none identified'}\n"
+                f"- 1h Resistance: ${resistance if resistance else 'none identified'}\n"
+                f"- 15m Support: ${candle.get('ltf_15m_support') or 'none identified'}\n"
+                f"- 15m Resistance: ${candle.get('ltf_15m_resistance') or 'none identified'}\n"
                 f"- 24h Low (floor): ${candle.get('low_24h', 'N/A')}\n"
                 f"- 24h High (ceiling): ${candle.get('high_24h', 'N/A')}"
+            )
+
+            # Lower timeframe entry data (15m + 5m)
+            ltf_lines = (
+                f"15m Entry Zone:\n"
+                f"  - 15m Trend: {candle.get('ltf_15m_trend', 'N/A')}\n"
+                f"  - 15m RSI: {candle.get('ltf_15m_rsi', 'N/A')}\n"
+                f"5m Entry Trigger:\n"
+                f"  - 5m Trend (last 1h): {candle.get('ltf_5m_trend', 'N/A')}\n"
+                f"  - 5m RSI: {candle.get('ltf_5m_rsi', 'N/A')}\n"
+                f"  - 5m Last 3 candles: {candle.get('ltf_5m_candle_pattern', 'N/A')}\n"
+                f"  - 5m ATR: {candle.get('ltf_5m_atr_pct', 'N/A')}%"
             )
         else:
             candle_lines = "No candle data available"
             htf_lines = "No higher timeframe data available"
             exhaustion_lines = "No exhaustion data available"
             level_lines = "No key levels identified"
+            ltf_lines = "No lower timeframe data available"
 
         # Determine exchange name for prompt context
         exchange_raw = market_data.get("exchange", "hyperliquid")
@@ -201,6 +234,7 @@ class AIEngineService:
             htf_summary=htf_lines,
             exhaustion_summary=exhaustion_lines,
             key_levels=level_lines,
+            ltf_entry_summary=ltf_lines,
             context=json.dumps(market_data, default=str),
         )
 
@@ -502,15 +536,24 @@ class AIEngineService:
                 hold_count += 1
                 continue
 
-            # Reject signals with stop loss too tight (< 1.5% from entry)
+            # Reject signals with stop loss too tight (< 0.5%) or too wide (> 3%)
             entry = aggregated["entry_price"]
             sl = aggregated["stop_loss"]
             if entry > 0 and sl > 0:
                 sl_distance_pct = abs(entry - sl) / entry * 100
-                if sl_distance_pct < 1.5:
+                if sl_distance_pct < 0.5:
                     logger.info(
                         "Skipping %s: SL too tight (%.2f%% from entry), "
-                        "minimum 1.5%% required",
+                        "minimum 0.5%% required",
+                        symbol,
+                        sl_distance_pct,
+                    )
+                    hold_count += 1
+                    continue
+                if sl_distance_pct > 3.0:
+                    logger.info(
+                        "Skipping %s: SL too wide (%.2f%% from entry), "
+                        "maximum 3%% — entry not precise enough",
                         symbol,
                         sl_distance_pct,
                     )
