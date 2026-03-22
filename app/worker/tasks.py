@@ -68,17 +68,18 @@ async def _is_task_disabled(task_name: str) -> bool:
 
 
 async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid AND Bybit, merge and return."""
-    limit = settings.analysis_top_symbols_limit
+    """Fetch market data from Hyperliquid (4) AND Bybit (6), merge and return."""
+    # Split: 6 Bybit + 4 HL = 10 total tokens to analyze
+    hl_limit = 4
+    bybit_limit = 6
 
-    # Fetch from both exchanges in parallel
     hl_service = HyperliquidService()
     bybit_service = BybitService()
 
     import asyncio
 
-    hl_task = hl_service.get_top_movers(limit=limit)
-    bybit_task = bybit_service.get_top_movers(limit=limit)
+    hl_task = hl_service.get_top_movers(limit=hl_limit)
+    bybit_task = bybit_service.get_top_movers(limit=bybit_limit)
 
     hl_results, bybit_results = await asyncio.gather(
         hl_task, bybit_task, return_exceptions=True
