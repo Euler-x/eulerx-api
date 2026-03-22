@@ -95,3 +95,69 @@ async def admin_delete_config(
     )
 
     return MessageResponse(message=f"Config key '{key}' deleted successfully")
+
+
+@router.get("/settings")
+async def admin_get_settings(db: AsyncSession = Depends(get_db)):
+    """Return all configurable settings with metadata, grouped by category.
+
+    Merges DB overrides with defaults from config.py.
+    """
+    from app.services.dynamic_config import get_all_config
+
+    return await get_all_config(db)
+
+
+@router.put("/settings/{key}")
+async def admin_set_setting(
+    key: str,
+    data: AdminConfigUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin_perms: UserPermissions = RequireAdmin,
+):
+    """Set a single setting value. Stores in admin_config table."""
+    from app.services.dynamic_config import CONFIG_DEFAULTS
+
+    if key not in CONFIG_DEFAULTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown setting: {key}",
+        )
+
+    result = await db.execute(select(AdminConfig).where(AdminConfig.key == key))
+    config = result.scalar_one_or_none()
+
+    if config is None:
+        config = AdminConfig(
+            key=key,
+            value=data.value,
+            description=CONFIG_DEFAULTS[key]["description"],
+        )
+        db.add(config)
+    else:
+        config.value = data.value
+
+    await db.flush()
+
+    await log_audit(
+        db=db,
+        user_id=admin_perms.user.id,
+        action="admin_set_setting",
+        resource_type="setting",
+        resource_id=key,
+        details={"value": data.value},
+        ip_address=request.client.host if request.client else None,
+    )
+
+    meta = CONFIG_DEFAULTS[key]
+    raw = config.value
+    val = raw.get("value", raw) if isinstance(raw, dict) else raw
+
+    return {
+        "key": key,
+        "value": val,
+        "category": meta["category"],
+        "label": meta["label"],
+        "source": "database",
+    }

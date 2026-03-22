@@ -68,10 +68,11 @@ async def _is_task_disabled(task_name: str) -> bool:
 
 
 async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid (4) AND Bybit (6), merge and return."""
-    # Split: 6 Bybit + 4 HL = 10 total tokens to analyze
-    hl_limit = 4
-    bybit_limit = 6
+    """Fetch market data from Hyperliquid AND Bybit, merge and return."""
+    from app.services.dynamic_config import get_config
+
+    hl_limit = await get_config("hl_symbols_limit", 4)
+    bybit_limit = await get_config("bybit_symbols_limit", 6)
 
     hl_service = HyperliquidService()
     bybit_service = BybitService()

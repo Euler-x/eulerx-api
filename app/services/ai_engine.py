@@ -519,12 +519,17 @@ class AIEngineService:
                 hold_count += 1
                 continue
 
-            if aggregated["confidence"] < settings.ate_confidence_threshold:
+            from app.services.dynamic_config import get_config
+
+            confidence_threshold = await get_config(
+                "ate_confidence_threshold", settings.ate_confidence_threshold, db
+            )
+            if aggregated["confidence"] < confidence_threshold:
                 logger.info(
                     "Skipping %s: confidence %.2f below %.2f threshold",
                     symbol,
                     aggregated["confidence"],
-                    settings.ate_confidence_threshold,
+                    confidence_threshold,
                 )
                 hold_count += 1
                 continue

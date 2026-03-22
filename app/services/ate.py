@@ -249,6 +249,13 @@ class ATEService:
         strategy: Strategy,
         user: User,
     ) -> Execution | None:
+        from app.services.dynamic_config import get_config
+
+        # Read dynamic config (DB overrides → env defaults)
+        default_leverage = await get_config(
+            "ate_default_leverage", settings.ate_default_leverage, db
+        )
+
         rate_key = f"ate:{user.id}"
         if not ate_rate_limiter.check(rate_key):
             logger.warning("ATE rate limit reached for user %s", user.id)
@@ -408,13 +415,13 @@ class ATEService:
             direction=signal.direction,
             entry_price=entry_price,
             quantity=quantity,
-            leverage=strategy.leverage_limit or settings.ate_default_leverage,
+            leverage=strategy.leverage_limit or default_leverage,
             status=ExecutionStatus.PENDING,
             exchange=signal_exchange,
         )
         db.add(execution)
 
-        target_leverage = int(strategy.leverage_limit or settings.ate_default_leverage)
+        target_leverage = int(strategy.leverage_limit or default_leverage)
 
         if is_bybit:
             # ── Bybit execution path ──────────────────────────────────
