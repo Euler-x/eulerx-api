@@ -604,13 +604,14 @@ class HyperliquidService:
             except Exception as e:
                 logger.warning(f"Failed to fetch candles for {coin}: {e}")
 
-        # Batch in groups of 3 with a short delay to avoid HL 429 rate limits
-        batch_size = 3
+        # Batch in groups of 2 with delay to avoid HL 429 rate limits
+        # (4 TFs × 2 symbols = 8 API calls per batch)
+        batch_size = 2
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i : i + batch_size]
             await asyncio.gather(*[_enrich_one(sym) for sym in batch])
             if i + batch_size < len(symbols):
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
         return symbols
 
     async def get_user_state(self, wallet_address: str) -> dict:
