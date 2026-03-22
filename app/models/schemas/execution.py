@@ -23,6 +23,7 @@ class ExecutionResponse(BaseModel):
     tx_hash: Optional[str]
     exchange_order_id: Optional[str] = None
     exchange: Exchange = Exchange.HYPERLIQUID
+    user_email: Optional[str] = None
     error_message: Optional[str] = None
     status: ExecutionStatus
     executed_at: Optional[datetime]

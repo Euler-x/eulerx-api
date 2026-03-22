@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.base import get_db
 from app.middleware.audit import log_audit
@@ -19,6 +20,14 @@ from app.models.schemas.execution import ExecutionResponse
 router = APIRouter()
 
 
+def _exec_response(ex: Execution) -> ExecutionResponse:
+    """Build ExecutionResponse with user_email from loaded relationship."""
+    resp = ExecutionResponse.model_validate(ex)
+    if ex.user is not None:
+        resp.user_email = ex.user.email
+    return resp
+
+
 @router.get("/executions", response_model=PaginatedResponse)
 async def admin_list_executions(
     page: int = Query(1, ge=1),
@@ -29,7 +38,11 @@ async def admin_list_executions(
     direction: Optional[SignalDirection] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Execution).order_by(Execution.created_at.desc())
+    query = (
+        select(Execution)
+        .options(selectinload(Execution.user))
+        .order_by(Execution.created_at.desc())
+    )
     count_query = select(func.count(Execution.id))
 
     if user_id:
@@ -51,7 +64,7 @@ async def admin_list_executions(
     executions = result.scalars().all()
 
     return PaginatedResponse(
-        items=[ExecutionResponse.model_validate(e) for e in executions],
+        items=[_exec_response(e) for e in executions],
         total=total,
         page=page,
         page_size=page_size,
