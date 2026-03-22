@@ -55,7 +55,7 @@ def upgrade() -> None:
     # ── Bybit Signals: separate table ──────────────────────────────
     op.create_table(
         "bybit_signals",
-        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("id", sa.CHAR(36), primary_key=True),
         sa.Column("symbol", sa.String(30), nullable=False, index=True),
         sa.Column("direction", direction_col_type, nullable=False),
         sa.Column("confidence", sa.Float(), nullable=False),
@@ -97,7 +97,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "executions",
-        sa.Column("bybit_signal_id", sa.Uuid(), nullable=True),
+        sa.Column("bybit_signal_id", sa.CHAR(36), nullable=True),
     )
     op.create_index("ix_executions_bybit_signal_id", "executions", ["bybit_signal_id"])
     op.create_foreign_key(
@@ -110,7 +110,7 @@ def upgrade() -> None:
     )
 
     # Make signal_id nullable (Bybit executions won't have one)
-    op.alter_column("executions", "signal_id", existing_type=sa.Uuid(), nullable=True)
+    op.alter_column("executions", "signal_id", existing_type=sa.CHAR(36), nullable=True)
 
 
 def downgrade() -> None:
