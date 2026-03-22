@@ -48,6 +48,22 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+async def _is_task_disabled(task_name: str) -> bool:
+    """Check if a scheduled task is disabled via admin_config."""
+    try:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(AdminConfig).where(AdminConfig.key == "disabled_tasks")
+            )
+            config = result.scalar_one_or_none()
+            if config:
+                disabled = config.value.get("tasks", [])
+                return task_name in disabled
+    except Exception:
+        pass
+    return False
+
+
 # ── Async Pipeline Functions ─────────────────────────────────────
 
 
@@ -410,6 +426,10 @@ def run_analysis_pipeline(self) -> dict:
     pure market analysis, strategies only provide risk management context
     during execution.
     """
+    if run_async(_is_task_disabled("analysis-pipeline")):
+        logger.info("analysis-pipeline task is disabled, skipping")
+        return {"status": "disabled"}
+
     pipeline_id = str(uuid.uuid4())[:8]
     logger.info("[Pipeline %s] Starting analysis pipeline", pipeline_id)
 
@@ -541,6 +561,8 @@ def run_analysis_pipeline(self) -> dict:
 )
 def expire_stale_signals() -> dict:
     """Maintenance: expire signals past their expires_at timestamp."""
+    if run_async(_is_task_disabled("expire-stale-signals")):
+        return {"status": "disabled"}
     count = run_async(_expire_stale_signals_async())
     return {"expired_count": count}
 
@@ -643,6 +665,8 @@ def send_notification_email(
 )
 def check_expiring_subscriptions() -> dict:
     """Daily: notify users whose subscriptions expire within 3 days."""
+    if run_async(_is_task_disabled("check-expiring-subscriptions")):
+        return {"status": "disabled"}
     count = run_async(_check_expiring_subscriptions_async())
     return {"notified_count": count}
 
@@ -704,6 +728,8 @@ async def _monitor_open_positions_async() -> dict:
 )
 def monitor_open_positions() -> dict:
     """Monitor open positions for TP/SL hits. Runs every 1 minute via Beat."""
+    if run_async(_is_task_disabled("monitor-positions")):
+        return {"status": "disabled"}
     try:
         return run_async(_monitor_open_positions_async())
     except SoftTimeLimitExceeded:
@@ -823,4 +849,6 @@ async def _cleanup_old_data_async() -> dict:
 )
 def cleanup_old_data() -> dict:
     """Weekly: clean up old expired signals beyond retention period."""
+    if run_async(_is_task_disabled("cleanup-old-data")):
+        return {"status": "disabled"}
     return run_async(_cleanup_old_data_async())
