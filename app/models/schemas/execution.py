@@ -4,12 +4,13 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.models.enums import ExecutionStatus, OrderType, SignalDirection
+from app.models.enums import Exchange, ExecutionStatus, OrderType, SignalDirection
 
 
 class ExecutionResponse(BaseModel):
     id: uuid.UUID
-    signal_id: uuid.UUID
+    signal_id: Optional[uuid.UUID] = None
+    bybit_signal_id: Optional[uuid.UUID] = None
     user_id: uuid.UUID
     strategy_id: uuid.UUID
     order_type: OrderType
@@ -20,6 +21,8 @@ class ExecutionResponse(BaseModel):
     leverage: float
     pnl: Optional[float]
     tx_hash: Optional[str]
+    exchange_order_id: Optional[str] = None
+    exchange: Exchange = Exchange.HYPERLIQUID
     error_message: Optional[str] = None
     status: ExecutionStatus
     executed_at: Optional[datetime]
