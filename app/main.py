@@ -18,6 +18,7 @@ from app.routers import (
     analytics,
     auth,
     billing,
+    chat,
     execution,
     learning,
     market,
@@ -244,6 +245,7 @@ app.include_router(support.router, prefix=prefix)
 app.include_router(telegram.router, prefix=prefix)
 app.include_router(learning.router, prefix=prefix)
 app.include_router(worker_health.router, prefix=prefix)
+app.include_router(chat.router, prefix=prefix)
 
 
 # ---------------------------------------------------------------------------
