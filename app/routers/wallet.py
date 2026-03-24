@@ -3,7 +3,8 @@ import logging
 from fastapi import APIRouter
 
 from app.middleware.permissions import RequireAuth, UserPermissions
-from app.models.schemas.wallet import WalletBalanceResponse
+from app.models.schemas.wallet import BybitBalanceResponse, WalletBalanceResponse
+from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.utils.helpers import utc_now
 
@@ -16,12 +17,7 @@ router = APIRouter(prefix="/wallet", tags=["Wallet"])
 async def get_wallet_balance(
     perms: UserPermissions = RequireAuth,
 ):
-    """Fetch the user's HyperLiquid wallet balance.
-
-    Returns zeros with has_wallet=False if no wallet is connected.
-    Returns zeros with has_wallet=True if the HL API is unreachable,
-    with last_synced=None to signal a sync failure.
-    """
+    """Fetch the user's HyperLiquid wallet balance."""
     user = perms.user
 
     if not user.wallet_address:
@@ -32,7 +28,6 @@ async def get_wallet_balance(
 
     hl = HyperliquidService()
 
-    # Fetch perps state
     perps_balance = 0.0
     available = 0.0
     margin_used = 0.0
@@ -61,7 +56,6 @@ async def get_wallet_balance(
             last_synced=None,
         )
 
-    # Fetch spot balances
     spot_balance = 0.0
     try:
         spot_balances = await hl.get_spot_balances(address)
@@ -83,3 +77,63 @@ async def get_wallet_balance(
         wallet_address_masked=masked,
         last_synced=utc_now().isoformat(),
     )
+
+
+@router.get("/bybit-balance", response_model=BybitBalanceResponse)
+async def get_bybit_balance(
+    perms: UserPermissions = RequireAuth,
+):
+    """Fetch the user's Bybit account balance."""
+    user = perms.user
+
+    if not user.bybit_api_key or not user.bybit_api_secret:
+        return BybitBalanceResponse(connected=False)
+
+    key_masked = f"{user.bybit_api_key[:6]}...{user.bybit_api_key[-4:]}"
+    svc = BybitService()
+
+    try:
+        state = await svc.get_user_state(user.bybit_api_key, user.bybit_api_secret)
+        if not state:
+            return BybitBalanceResponse(
+                connected=True,
+                testnet=user.bybit_testnet,
+                api_key_masked=key_masked,
+                last_synced=None,
+            )
+
+        equity = float(state.get("totalEquity", 0))
+        available = float(state.get("totalAvailableBalance", 0))
+
+        # Count open positions and unrealized PnL
+        open_positions = 0
+        unrealized_pnl = 0.0
+        try:
+            positions = await svc.get_user_positions(
+                user.bybit_api_key, user.bybit_api_secret
+            )
+            open_positions = len(positions)
+            for pos in positions.values():
+                unrealized_pnl += pos.get("unrealized_pnl", 0.0)
+        except Exception as e:
+            logger.error("Failed to fetch Bybit positions: %s", e)
+
+        return BybitBalanceResponse(
+            connected=True,
+            testnet=user.bybit_testnet,
+            account_equity=round(equity, 2),
+            available_balance=round(available, 2),
+            unrealized_pnl=round(unrealized_pnl, 2),
+            total_balance=round(equity, 2),
+            open_positions=open_positions,
+            api_key_masked=key_masked,
+            last_synced=utc_now().isoformat(),
+        )
+    except Exception as e:
+        logger.error("Failed to fetch Bybit balance: %s", e)
+        return BybitBalanceResponse(
+            connected=True,
+            testnet=user.bybit_testnet,
+            api_key_masked=key_masked,
+            last_synced=None,
+        )
