@@ -20,6 +20,7 @@ async def list_executions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: ExecutionStatus | None = None,
+    exchange: str | None = Query(default=None),
     perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
@@ -36,6 +37,10 @@ async def list_executions(
     else:
         query = query.where(Execution.status != ExecutionStatus.FAILED)
         count_query = count_query.where(Execution.status != ExecutionStatus.FAILED)
+
+    if exchange:
+        query = query.where(Execution.exchange == exchange)
+        count_query = count_query.where(Execution.exchange == exchange)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0

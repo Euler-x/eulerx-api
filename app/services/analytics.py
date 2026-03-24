@@ -19,6 +19,7 @@ class AnalyticsService:
         user_id: uuid.UUID,
         strategy_id: uuid.UUID | None = None,
         days: int = 30,
+        exchange: str | None = None,
     ) -> list[Execution]:
         query = (
             select(Execution)
@@ -32,6 +33,8 @@ class AnalyticsService:
         )
         if strategy_id:
             query = query.where(Execution.strategy_id == strategy_id)
+        if exchange:
+            query = query.where(Execution.exchange == exchange)
 
         result = await db.execute(query)
         return list(result.scalars().all())
@@ -142,8 +145,11 @@ class AnalyticsService:
         user_id: uuid.UUID,
         strategy_id: uuid.UUID | None = None,
         days: int = 30,
+        exchange: str | None = None,
     ) -> dict:
-        executions = await cls.get_closed_executions(db, user_id, strategy_id, days)
+        executions = await cls.get_closed_executions(
+            db, user_id, strategy_id, days, exchange=exchange
+        )
         return {
             "total_trades": len(executions),
             "win_rate": cls.win_rate(executions),
@@ -164,6 +170,9 @@ class AnalyticsService:
         user_id: uuid.UUID,
         strategy_id: uuid.UUID | None = None,
         days: int = 30,
+        exchange: str | None = None,
     ) -> list[dict]:
-        executions = await cls.get_closed_executions(db, user_id, strategy_id, days)
+        executions = await cls.get_closed_executions(
+            db, user_id, strategy_id, days, exchange=exchange
+        )
         return cls.equity_curve(executions)
