@@ -586,6 +586,13 @@ class BybitService:
                         "entry_px": float(p.get("avgPrice", 0)),
                         "unrealized_pnl": float(p.get("unrealisedPnl", 0)),
                         "side": p.get("side"),
+                        "mark_price": float(p.get("markPrice", 0)),
+                        "leverage": float(p.get("leverage", 0)),
+                        "liq_price": float(p.get("liqPrice", 0))
+                        if p.get("liqPrice")
+                        else None,
+                        "position_value": float(p.get("positionValue", 0)),
+                        "margin_used": float(p.get("positionIM", 0)),
                     }
             return positions
 

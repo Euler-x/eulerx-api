@@ -22,6 +22,7 @@ from app.routers import (
     execution,
     learning,
     market,
+    positions_ws,
     signals,
     strategies,
     support,
@@ -246,6 +247,7 @@ app.include_router(telegram.router, prefix=prefix)
 app.include_router(learning.router, prefix=prefix)
 app.include_router(worker_health.router, prefix=prefix)
 app.include_router(chat.router, prefix=prefix)
+app.include_router(positions_ws.router, prefix=prefix)
 
 
 # ---------------------------------------------------------------------------
