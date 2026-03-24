@@ -7,6 +7,7 @@ from app.models.schemas.wallet import BybitBalanceResponse, WalletBalanceRespons
 from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.utils.helpers import utc_now
+from app.utils.security import decrypt_private_key
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +87,23 @@ async def get_bybit_balance(
     """Fetch the user's Bybit account balance."""
     user = perms.user
 
-    if not user.bybit_api_key or not user.bybit_api_secret:
+    if not user.bybit_api_key_encrypted or not user.bybit_api_secret_encrypted:
         return BybitBalanceResponse(connected=False)
 
-    key_masked = f"{user.bybit_api_key[:6]}...{user.bybit_api_key[-4:]}"
+    try:
+        api_key = decrypt_private_key(user.bybit_api_key_encrypted)
+        api_secret = decrypt_private_key(user.bybit_api_secret_encrypted)
+    except Exception as e:
+        logger.error("Failed to decrypt Bybit keys for user %s: %s", user.id, e)
+        return BybitBalanceResponse(
+            connected=True, testnet=user.bybit_testnet, last_synced=None
+        )
+
+    key_masked = f"{api_key[:6]}...{api_key[-4:]}"
     svc = BybitService()
 
     try:
-        state = await svc.get_user_state(user.bybit_api_key, user.bybit_api_secret)
+        state = await svc.get_user_state(api_key, api_secret)
         if not state:
             return BybitBalanceResponse(
                 connected=True,
@@ -109,9 +119,7 @@ async def get_bybit_balance(
         open_positions = 0
         unrealized_pnl = 0.0
         try:
-            positions = await svc.get_user_positions(
-                user.bybit_api_key, user.bybit_api_secret
-            )
+            positions = await svc.get_user_positions(api_key, api_secret)
             open_positions = len(positions)
             for pos in positions.values():
                 unrealized_pnl += pos.get("unrealized_pnl", 0.0)
