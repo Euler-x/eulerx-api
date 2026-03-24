@@ -100,7 +100,7 @@ async def get_bybit_balance(
         )
 
     key_masked = f"{api_key[:6]}...{api_key[-4:]}"
-    svc = BybitService()
+    svc = BybitService(testnet=user.bybit_testnet)
 
     try:
         state = await svc.get_user_state(api_key, api_secret)
