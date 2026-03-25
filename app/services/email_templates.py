@@ -105,10 +105,12 @@ def trade_executed(
     quantity: str,
     entry_price: str,
     strategy_name: str,
+    exchange: str = "hyperliquid",
 ) -> tuple[str, str]:
     """Trade executed notification."""
     color = "#39FF14" if direction.upper() == "BUY" else "#FF4444"
-    subject = f"Trade Executed — {direction.upper()} {symbol}"
+    ex_label = "Bybit" if exchange == "bybit" else "HL"
+    subject = f"[{ex_label}] Trade Executed — {direction.upper()} {symbol}"
     body = _load("trade_executed").format(
         symbol=symbol,
         direction=direction.upper(),
@@ -192,9 +194,11 @@ def take_profit_hit(
     exit_price: str,
     pnl: str,
     strategy_name: str,
+    exchange: str = "hyperliquid",
 ) -> tuple[str, str]:
     """Take profit hit notification."""
-    subject = f"Take Profit Hit — {symbol}"
+    ex_label = "Bybit" if exchange == "bybit" else "HL"
+    subject = f"[{ex_label}] Take Profit Hit — {symbol}"
     body = _load("take_profit_hit").format(
         symbol=symbol,
         direction=direction.upper(),
@@ -215,9 +219,11 @@ def stop_loss_hit(
     exit_price: str,
     pnl: str,
     strategy_name: str,
+    exchange: str = "hyperliquid",
 ) -> tuple[str, str]:
     """Stop loss hit notification."""
-    subject = f"Stop Loss Triggered — {symbol}"
+    ex_label = "Bybit" if exchange == "bybit" else "HL"
+    subject = f"[{ex_label}] Stop Loss Triggered — {symbol}"
     body = _load("stop_loss_hit").format(
         symbol=symbol,
         direction=direction.upper(),

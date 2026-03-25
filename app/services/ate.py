@@ -622,6 +622,7 @@ class ATEService:
                     quantity=str(quantity),
                     entry_price=str(entry_price),
                     strategy_name=strategy.name,
+                    exchange=signal_exchange.value,
                 )
             except Exception as e:
                 logger.error("Failed to send trade executed email: %s", e)
@@ -932,6 +933,7 @@ class ATEService:
             "user": user,
             "strategy_name": strategy_name,
             "direction": execution.direction.value,
+            "exchange": getattr(execution, "exchange", Exchange.HYPERLIQUID).value,
         }
 
     async def _send_close_notification(
@@ -942,6 +944,7 @@ class ATEService:
         if not user:
             return
         try:
+            ex = entry.get("exchange", "hyperliquid")
             if entry["triggered"] == "take_profit":
                 await notification_service.send_take_profit_hit(
                     user=user,
@@ -951,6 +954,7 @@ class ATEService:
                     exit_price=str(entry["exit_price"]),
                     pnl=f"{entry['pnl']:+.4f}",
                     strategy_name=entry["strategy_name"],
+                    exchange=ex,
                 )
             elif entry["triggered"] == "stop_loss":
                 await notification_service.send_stop_loss_hit(
@@ -961,6 +965,7 @@ class ATEService:
                     exit_price=str(entry["exit_price"]),
                     pnl=f"{entry['pnl']:+.4f}",
                     strategy_name=entry["strategy_name"],
+                    exchange=ex,
                 )
         except Exception as e:
             logger.error("Failed to send %s notification: %s", entry["triggered"], e)

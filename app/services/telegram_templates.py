@@ -10,10 +10,13 @@ def trade_executed(
     quantity: str,
     entry_price: str,
     strategy_name: str,
+    exchange: str = "hyperliquid",
 ) -> str:
     arrow = "\U0001f7e2" if direction.upper() == "BUY" else "\U0001f534"
+    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
     return (
-        f"{arrow} <b>Trade Executed</b>\n\n"
+        f"{arrow} <b>Trade Executed</b> \u2014 {ex_label}\n\n"
+        f"<b>Exchange:</b> {ex_label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Symbol:</b> {symbol}\n"
         f"<b>Direction:</b> {direction.upper()}\n"
@@ -29,9 +32,12 @@ def take_profit_hit(
     exit_price: str,
     pnl: str,
     strategy_name: str,
+    exchange: str = "hyperliquid",
 ) -> str:
+    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
     return (
-        f"\U0001f3af <b>Take Profit Hit!</b>\n\n"
+        f"\U0001f3af <b>Take Profit Hit!</b> \u2014 {ex_label}\n\n"
+        f"<b>Exchange:</b> {ex_label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Symbol:</b> {symbol}\n"
         f"<b>Direction:</b> {direction.upper()}\n"
@@ -48,9 +54,12 @@ def stop_loss_hit(
     exit_price: str,
     pnl: str,
     strategy_name: str,
+    exchange: str = "hyperliquid",
 ) -> str:
+    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
     return (
-        f"\U0001f6d1 <b>Stop Loss Triggered</b>\n\n"
+        f"\U0001f6d1 <b>Stop Loss Triggered</b> \u2014 {ex_label}\n\n"
+        f"<b>Exchange:</b> {ex_label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Symbol:</b> {symbol}\n"
         f"<b>Direction:</b> {direction.upper()}\n"

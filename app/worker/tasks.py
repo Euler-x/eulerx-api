@@ -33,6 +33,7 @@ import app.models.database  # noqa: F401  — register all models before any que
 from app.models.billing import Subscription
 from app.models.admin_config import AdminConfig
 from app.models.enums import SignalStatus, SubscriptionStatus
+from app.models.bybit_signal import BybitSignal
 from app.models.signal import Signal
 from app.models.strategy import Strategy
 from app.models.enums import Exchange
@@ -294,10 +295,13 @@ async def _execute_signal_for_strategy_async(
 
 
 async def _expire_stale_signals_async() -> int:
-    """Mark expired signals. Returns count of expired signals."""
+    """Mark expired signals (both HL and Bybit). Returns count of expired signals."""
     async with async_session_factory() as session:
         try:
             now = utc_now()
+            total_expired = 0
+
+            # Expire HL signals
             result = await session.execute(
                 select(Signal).where(
                     Signal.status == SignalStatus.NEW,
@@ -306,15 +310,33 @@ async def _expire_stale_signals_async() -> int:
                 )
             )
             stale_signals = result.scalars().all()
-
             for signal in stale_signals:
                 signal.status = SignalStatus.EXPIRED
+            total_expired += len(stale_signals)
 
-            if stale_signals:
+            # Expire Bybit signals
+            result_bb = await session.execute(
+                select(BybitSignal).where(
+                    BybitSignal.status == SignalStatus.NEW,
+                    BybitSignal.expires_at != None,  # noqa: E711
+                    BybitSignal.expires_at < now,
+                )
+            )
+            stale_bybit = result_bb.scalars().all()
+            for signal in stale_bybit:
+                signal.status = SignalStatus.EXPIRED
+            total_expired += len(stale_bybit)
+
+            if total_expired:
                 await session.commit()
-                logger.info("Expired %d stale signals", len(stale_signals))
+                logger.info(
+                    "Expired %d stale signals (%d HL, %d Bybit)",
+                    total_expired,
+                    len(stale_signals),
+                    len(stale_bybit),
+                )
 
-            return len(stale_signals)
+            return total_expired
         except Exception:
             await session.rollback()
             raise

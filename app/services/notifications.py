@@ -351,18 +351,19 @@ class NotificationService:
         quantity: str,
         entry_price: str,
         strategy_name: str,
+        exchange: str = "hyperliquid",
     ) -> None:
         """Category: trades. Rate-limited."""
         if not self._check_notification_rate(user, "trade_executed"):
             return
 
         subject, html = email_templates.trade_executed(
-            symbol, direction, quantity, entry_price, strategy_name
+            symbol, direction, quantity, entry_price, strategy_name, exchange=exchange
         )
         await self._dispatch_email(user, "trades", subject, html)
 
         text = telegram_templates.trade_executed(
-            symbol, direction, quantity, entry_price, strategy_name
+            symbol, direction, quantity, entry_price, strategy_name, exchange=exchange
         )
         await self._dispatch_telegram(user, "trades", text)
 
@@ -375,18 +376,31 @@ class NotificationService:
         exit_price: str,
         pnl: str,
         strategy_name: str,
+        exchange: str = "hyperliquid",
     ) -> None:
         """Category: trades. Rate-limited."""
         if not self._check_notification_rate(user, "take_profit_hit"):
             return
 
         subject, html = email_templates.take_profit_hit(
-            symbol, direction, entry_price, exit_price, pnl, strategy_name
+            symbol,
+            direction,
+            entry_price,
+            exit_price,
+            pnl,
+            strategy_name,
+            exchange=exchange,
         )
         await self._dispatch_email(user, "trades", subject, html)
 
         text = telegram_templates.take_profit_hit(
-            symbol, direction, entry_price, exit_price, pnl, strategy_name
+            symbol,
+            direction,
+            entry_price,
+            exit_price,
+            pnl,
+            strategy_name,
+            exchange=exchange,
         )
         await self._dispatch_telegram(user, "trades", text)
 
@@ -399,18 +413,31 @@ class NotificationService:
         exit_price: str,
         pnl: str,
         strategy_name: str,
+        exchange: str = "hyperliquid",
     ) -> None:
         """Category: trades. Rate-limited."""
         if not self._check_notification_rate(user, "stop_loss_hit"):
             return
 
         subject, html = email_templates.stop_loss_hit(
-            symbol, direction, entry_price, exit_price, pnl, strategy_name
+            symbol,
+            direction,
+            entry_price,
+            exit_price,
+            pnl,
+            strategy_name,
+            exchange=exchange,
         )
         await self._dispatch_email(user, "trades", subject, html)
 
         text = telegram_templates.stop_loss_hit(
-            symbol, direction, entry_price, exit_price, pnl, strategy_name
+            symbol,
+            direction,
+            entry_price,
+            exit_price,
+            pnl,
+            strategy_name,
+            exchange=exchange,
         )
         await self._dispatch_telegram(user, "trades", text)
 
