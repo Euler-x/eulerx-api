@@ -462,6 +462,37 @@ class ATEService:
             tp_price = float(signal.take_profit) if signal.take_profit else None
             sl_price = float(signal.stop_loss) if signal.stop_loss else None
 
+            # Bybit validates TP/SL against current market price, not entry.
+            # Fetch current price and validate/adjust TP/SL before placing.
+            try:
+                ticker = await user_bybit.get_ticker(signal.symbol)
+                last_price = float(ticker.get("lastPrice", 0)) if ticker else 0
+            except Exception:
+                last_price = entry_price
+
+            if last_price > 0 and tp_price and sl_price:
+                if is_buy:
+                    # BUY: TP must be above lastPrice, SL must be below
+                    if tp_price <= last_price:
+                        tp_price = round(last_price * 1.02, 8)  # +2% from current
+                    if sl_price >= last_price:
+                        sl_price = round(last_price * 0.98, 8)  # -2% from current
+                else:
+                    # SELL: TP must be below lastPrice, SL must be above
+                    if tp_price >= last_price:
+                        tp_price = round(last_price * 0.98, 8)  # -2% from current
+                    if sl_price <= last_price:
+                        sl_price = round(last_price * 1.02, 8)  # +2% from current
+
+                logger.info(
+                    "Bybit TP/SL adjusted for %s %s: lastPrice=%.6f tp=%.6f sl=%.6f",
+                    "BUY" if is_buy else "SELL",
+                    signal.symbol,
+                    last_price,
+                    tp_price,
+                    sl_price,
+                )
+
             order_result = await user_bybit.place_order(
                 api_key=api_key,
                 api_secret=api_secret,

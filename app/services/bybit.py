@@ -81,90 +81,116 @@ class BybitService:
                 continue
         return symbols
 
+    async def get_ticker(self, symbol: str) -> dict | None:
+        """Fetch single ticker for a symbol."""
+
+        def _fetch():
+            session = self._get_session()
+            resp = session.get_tickers(category="linear", symbol=symbol)
+            if resp["retCode"] != 0:
+                return None
+            tickers = resp["result"]["list"]
+            return tickers[0] if tickers else None
+
+        return await asyncio.to_thread(_fetch)
+
     async def get_candles(
         self, symbol: str, interval: str = "60", limit: int = 24
     ) -> list[dict]:
         """Fetch kline data. Bybit intervals: 1,3,5,15,30,60,120,240,360,720,D,W,M"""
 
         def _fetch():
+            import time
+
             session = self._get_session()
-            resp = session.get_kline(
-                category="linear",
-                symbol=symbol,
-                interval=interval,
-                limit=limit,
-            )
-            if resp["retCode"] != 0:
-                raise Exception(f"Bybit kline error: {resp['retMsg']}")
-            # Bybit returns newest first, reverse for chronological order
-            raw = resp["result"]["list"]
-            raw.reverse()
-            # Convert to standard format: each is [startTime, open, high, low, close, volume, turnover]
-            candles = []
-            for c in raw:
-                candles.append(
-                    {
-                        "t": int(c[0]),  # timestamp ms
-                        "o": c[1],  # open
-                        "h": c[2],  # high
-                        "l": c[3],  # low
-                        "c": c[4],  # close
-                        "v": c[5],  # volume
-                    }
-                )
-            return candles
+            for attempt in range(3):
+                try:
+                    resp = session.get_kline(
+                        category="linear",
+                        symbol=symbol,
+                        interval=interval,
+                        limit=limit,
+                    )
+                    if resp["retCode"] != 0:
+                        raise Exception(f"Bybit kline error: {resp['retMsg']}")
+                    # Bybit returns newest first, reverse for chronological order
+                    raw = resp["result"]["list"]
+                    raw.reverse()
+                    candles = []
+                    for c in raw:
+                        candles.append(
+                            {
+                                "t": int(c[0]),
+                                "o": c[1],
+                                "h": c[2],
+                                "l": c[3],
+                                "c": c[4],
+                                "v": c[5],
+                            }
+                        )
+                    return candles
+                except Exception as e:
+                    err = str(e)
+                    if "limit-reset" in err or "429" in err or "Too Many" in err:
+                        wait = 1.0 * (attempt + 1)
+                        time.sleep(wait)
+                        continue
+                    raise
+            return []
 
         return await asyncio.to_thread(_fetch)
 
     async def get_top_movers(self, limit: int = 20) -> list[dict]:
-        """Get balanced top movers from Bybit and enrich with candle data."""
+        """Get balanced top movers from Bybit and enrich with candle data.
+
+        IMPORTANT: Pre-select candidates from ticker data FIRST, then only
+        enrich the shortlist with candles. This avoids 2000+ API calls.
+        """
         try:
             market_data = await self.get_market_data()
             if not market_data:
                 return []
 
-            # Enrich with candle data
-            enriched = await self.enrich_with_candles(market_data)
-            enriched = [s for s in enriched if s.get("candle_summary")]
+            # Filter: must have volume > $100K turnover
+            candidates = [s for s in market_data if s.get("turnover_24h", 0) > 100_000]
 
-            def _activity_score(sym: dict) -> float:
-                candle = sym.get("candle_summary", {})
-                change = abs(candle.get("price_change_24h_pct", 0))
-                volume = candle.get("total_volume_24h", 0)
-                volatility = abs(candle.get("volatility_pct", 0))
-                return (change + volatility) * math.log1p(volume)
+            def _ticker_activity(sym: dict) -> float:
+                change = abs(sym.get("price_change_24h_pct", 0))
+                vol = sym.get("turnover_24h", 0)
+                return change * math.log1p(vol)
 
             bucket_size = max(limit // 3, 1)
 
+            # Pre-select from ticker data (no candle fetch needed)
             gainers = sorted(
-                enriched,
-                key=lambda s: s.get("candle_summary", {}).get(
-                    "price_change_24h_pct", 0
-                ),
+                candidates,
+                key=lambda s: s.get("price_change_24h_pct", 0),
                 reverse=True,
             )[:bucket_size]
 
             losers = sorted(
-                enriched,
-                key=lambda s: s.get("candle_summary", {}).get(
-                    "price_change_24h_pct", 0
-                ),
+                candidates,
+                key=lambda s: s.get("price_change_24h_pct", 0),
             )[:bucket_size]
 
-            by_activity = sorted(enriched, key=_activity_score, reverse=True)
+            by_activity = sorted(candidates, key=_ticker_activity, reverse=True)
 
             seen = set()
-            merged: list[dict] = []
+            shortlist: list[dict] = []
             for sym in gainers + losers + by_activity:
                 name = sym.get("symbol", "")
                 if name not in seen:
                     seen.add(name)
-                    merged.append(sym)
-                if len(merged) >= limit:
+                    shortlist.append(sym)
+                if len(shortlist) >= limit:
                     break
 
+            # NOW enrich only the shortlist with candle data (limit × 4 TF calls)
+            enriched = await self.enrich_with_candles(shortlist)
+            enriched = [s for s in enriched if s.get("candle_summary")]
+
             # Add regime tags
-            for sym in merged:
+            for sym in enriched:
                 candle = sym.get("candle_summary", {})
                 change = candle.get("price_change_24h_pct", 0)
                 rsi = candle.get("rsi_14", 50)
@@ -186,10 +212,10 @@ class BybitService:
 
             logger.info(
                 "Bybit top movers: %d symbols selected from %d total",
-                len(merged),
+                len(enriched),
                 len(market_data),
             )
-            return merged
+            return enriched
         except Exception as e:
             logger.error("Failed to fetch Bybit top movers: %s", e)
             return []
@@ -523,13 +549,14 @@ class BybitService:
             except Exception as e:
                 logger.warning("Failed to fetch Bybit candles for %s: %s", symbol, e)
 
-        # Batch in groups of 5 with delay to respect rate limits
-        batch_size = 5
+        # Batch in groups of 2 with delay — each symbol needs 4 TF calls
+        # Bybit rate limit: ~120 req/5s, so 2 symbols × 4 TFs = 8 per batch
+        batch_size = 2
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i : i + batch_size]
             await asyncio.gather(*[_enrich_one(sym) for sym in batch])
             if i + batch_size < len(symbols):
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(1.0)
         return symbols
 
     # ── Authenticated Endpoints (user-specific keys) ───────────────
