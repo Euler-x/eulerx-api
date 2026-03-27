@@ -1,15 +1,18 @@
 """Admin analytics router — revenue, user growth, execution statistics, and comprehensive dashboard."""
 
+import math
+import statistics
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.models.billing import Payment, Plan, Subscription
+from app.models.bybit_signal import BybitSignal
 from app.models.enums import (
     ExecutionStatus,
     SignalStatus,
@@ -838,3 +841,550 @@ async def admin_revenue_chart(
         )
         for r in daily_rows
     ]
+
+
+# ── Performance Analytics (comprehensive) ─────────────────
+
+
+class ExchangeStats(BaseModel):
+    exchange: str
+    trades: int
+    wins: int
+    losses: int
+    total_pnl: float
+    avg_pnl: float
+    volume: float
+
+
+class SignalFunnel(BaseModel):
+    generated: int
+    executed: int
+    filled: int
+    profitable: int
+    conversion_rate: float
+    profitability_rate: float
+
+
+class RecentTrade(BaseModel):
+    id: str
+    symbol: str
+    direction: str
+    exchange: str
+    pnl: Optional[float]
+    status: str
+    entry_price: float
+    exit_price: Optional[float]
+    leverage: float
+    created_at: str
+
+
+class PerformanceAnalyticsResponse(BaseModel):
+    total_trades: int
+    win_rate: float
+    loss_rate: float
+    total_pnl: float
+    avg_pnl: float
+    profit_factor: float
+    sharpe_ratio: float
+    max_drawdown: float
+    best_trade: float
+    worst_trade: float
+    trade_volume: float
+    active_users: int
+
+    pnl_by_day: list[PnlByDay]
+    cumulative_pnl_by_day: list[dict]
+    executions_by_day: list[ExecutionsByDay]
+
+    by_exchange: list[ExchangeStats]
+    by_direction: dict[str, DirectionStats]
+    by_symbol: list[SymbolTradingStats]
+    by_strategy_type: list[StrategyTypeStats]
+
+    signal_funnel: SignalFunnel
+    recent_trades: list[RecentTrade]
+
+
+def _resolve_period(
+    period: str,
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+) -> tuple[datetime, datetime]:
+    now = utc_now()
+    if period == "today":
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "7d":
+        since = now - timedelta(days=7)
+    elif period == "30d":
+        since = now - timedelta(days=30)
+    elif period == "90d":
+        since = now - timedelta(days=90)
+    elif period == "custom":
+        if not start_date or not end_date:
+            raise HTTPException(
+                400, "start_date and end_date required for custom period"
+            )
+        return start_date, end_date
+    else:
+        since = now - timedelta(days=30)
+    return since, now
+
+
+@router.get("/analytics/performance", response_model=PerformanceAnalyticsResponse)
+async def admin_performance_analytics(
+    period: str = Query(default="30d"),
+    start_date: Optional[datetime] = Query(default=None),
+    end_date: Optional[datetime] = Query(default=None),
+    exchange: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Comprehensive trading performance analytics with period and exchange filters."""
+    since, until = _resolve_period(period, start_date, end_date)
+
+    closed_statuses = [ExecutionStatus.CLOSED, ExecutionStatus.FILLED]
+
+    # Base filters
+    base_filters = [
+        Execution.status.in_(closed_statuses),
+        Execution.pnl.isnot(None),
+        Execution.created_at >= since,
+        Execution.created_at <= until,
+    ]
+    if exchange:
+        base_filters.append(Execution.exchange == exchange)
+
+    # ── 1. Core aggregates ───────────────────────────────────
+    agg = (
+        await db.execute(
+            select(
+                func.count(Execution.id).label("total_trades"),
+                func.count(case((Execution.pnl > 0, 1))).label("wins"),
+                func.count(case((Execution.pnl <= 0, 1))).label("losses"),
+                func.coalesce(func.sum(Execution.pnl), 0).label("total_pnl"),
+                func.coalesce(func.avg(Execution.pnl), 0).label("avg_pnl"),
+                func.coalesce(func.max(Execution.pnl), 0).label("best_trade"),
+                func.coalesce(func.min(Execution.pnl), 0).label("worst_trade"),
+                func.coalesce(
+                    func.sum(
+                        Execution.quantity * Execution.entry_price * Execution.leverage
+                    ),
+                    0,
+                ).label("trade_volume"),
+                func.count(func.distinct(Execution.user_id)).label("active_users"),
+                func.coalesce(
+                    func.sum(case((Execution.pnl > 0, Execution.pnl), else_=0)),
+                    0,
+                ).label("gross_profit"),
+                func.coalesce(
+                    func.sum(case((Execution.pnl < 0, Execution.pnl), else_=0)),
+                    0,
+                ).label("gross_loss"),
+            ).where(*base_filters)
+        )
+    ).one()
+
+    total_trades = agg.total_trades
+    wins = agg.wins
+    win_rate = round((wins / total_trades * 100) if total_trades > 0 else 0.0, 2)
+    loss_rate = round(100 - win_rate if total_trades > 0 else 0.0, 2)
+
+    gross_profit = float(agg.gross_profit)
+    gross_loss = abs(float(agg.gross_loss))
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0.0
+
+    # ── 2. PnL by day + cumulative + Sharpe + max drawdown ──
+    pnl_day_q = (
+        select(
+            func.date(Execution.created_at).label("day"),
+            func.coalesce(func.sum(Execution.pnl), 0).label("pnl"),
+            func.count(Execution.id).label("trades_count"),
+        )
+        .where(*base_filters)
+        .group_by(func.date(Execution.created_at))
+        .order_by(func.date(Execution.created_at))
+    )
+    pnl_day_rows = (await db.execute(pnl_day_q)).all()
+
+    pnl_by_day = []
+    cumulative_pnl_by_day = []
+    daily_pnls = []
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+
+    for r in pnl_day_rows:
+        day_pnl = float(r.pnl)
+        daily_pnls.append(day_pnl)
+        cumulative += day_pnl
+        if cumulative > peak:
+            peak = cumulative
+        dd = peak - cumulative
+        if dd > max_drawdown:
+            max_drawdown = dd
+
+        pnl_by_day.append(
+            PnlByDay(date=str(r.day), pnl=day_pnl, trades_count=r.trades_count)
+        )
+        cumulative_pnl_by_day.append(
+            {"date": str(r.day), "cumulative_pnl": round(cumulative, 2)}
+        )
+
+    # Sharpe ratio
+    if len(daily_pnls) > 1:
+        mean_pnl = statistics.mean(daily_pnls)
+        stdev_pnl = statistics.stdev(daily_pnls)
+        sharpe_ratio = (
+            round((mean_pnl / stdev_pnl) * math.sqrt(365), 2) if stdev_pnl > 0 else 0.0
+        )
+    else:
+        sharpe_ratio = 0.0
+
+    # ── 3. Executions by day (all statuses) ──────────────────
+    exec_day_filters = [Execution.created_at >= since, Execution.created_at <= until]
+    if exchange:
+        exec_day_filters.append(Execution.exchange == exchange)
+
+    exec_day_q = (
+        select(
+            func.date(Execution.created_at).label("day"),
+            func.count(case((Execution.status.in_(closed_statuses), 1))).label(
+                "filled"
+            ),
+            func.count(case((Execution.status == ExecutionStatus.FAILED, 1))).label(
+                "failed"
+            ),
+            func.count(Execution.id).label("total"),
+        )
+        .where(*exec_day_filters)
+        .group_by(func.date(Execution.created_at))
+        .order_by(func.date(Execution.created_at))
+    )
+    exec_day_rows = (await db.execute(exec_day_q)).all()
+    executions_by_day = [
+        ExecutionsByDay(
+            date=str(r.day), filled=r.filled, failed=r.failed, total=r.total
+        )
+        for r in exec_day_rows
+    ]
+
+    # ── 4. By exchange ───────────────────────────────────────
+    ex_filters = [
+        Execution.status.in_(closed_statuses),
+        Execution.pnl.isnot(None),
+        Execution.created_at >= since,
+        Execution.created_at <= until,
+    ]
+    ex_q = (
+        select(
+            Execution.exchange,
+            func.count(Execution.id).label("trades"),
+            func.count(case((Execution.pnl > 0, 1))).label("wins"),
+            func.count(case((Execution.pnl <= 0, 1))).label("losses"),
+            func.coalesce(func.sum(Execution.pnl), 0).label("total_pnl"),
+            func.coalesce(func.avg(Execution.pnl), 0).label("avg_pnl"),
+            func.coalesce(
+                func.sum(
+                    Execution.quantity * Execution.entry_price * Execution.leverage
+                ),
+                0,
+            ).label("volume"),
+        )
+        .where(*ex_filters)
+        .group_by(Execution.exchange)
+    )
+    ex_rows = (await db.execute(ex_q)).all()
+    by_exchange = [
+        ExchangeStats(
+            exchange=r.exchange.value
+            if hasattr(r.exchange, "value")
+            else str(r.exchange),
+            trades=r.trades,
+            wins=r.wins,
+            losses=r.losses,
+            total_pnl=round(float(r.total_pnl), 2),
+            avg_pnl=round(float(r.avg_pnl), 2),
+            volume=round(float(r.volume), 2),
+        )
+        for r in ex_rows
+    ]
+
+    # ── 5. By direction ──────────────────────────────────────
+    dir_q = (
+        select(
+            Execution.direction,
+            func.count(Execution.id).label("trades"),
+            func.count(case((Execution.pnl > 0, 1))).label("wins"),
+            func.coalesce(func.sum(Execution.pnl), 0).label("pnl"),
+        )
+        .where(*base_filters)
+        .group_by(Execution.direction)
+    )
+    dir_rows = (await db.execute(dir_q)).all()
+    by_direction: dict[str, DirectionStats] = {}
+    for r in dir_rows:
+        key = r.direction.value if hasattr(r.direction, "value") else str(r.direction)
+        by_direction[key.lower()] = DirectionStats(
+            trades=r.trades, wins=r.wins, pnl=round(float(r.pnl), 2)
+        )
+    for key in ("buy", "sell"):
+        if key not in by_direction:
+            by_direction[key] = DirectionStats(trades=0, wins=0, pnl=0.0)
+
+    # ── 6. By symbol (HL + Bybit combined) ───────────────────
+    # HL signals
+    hl_sym_q = (
+        select(
+            Signal.symbol,
+            func.count(Execution.id).label("trades"),
+            func.count(case((Execution.pnl > 0, 1))).label("wins"),
+            func.count(case((Execution.pnl <= 0, 1))).label("losses"),
+            func.coalesce(func.sum(Execution.pnl), 0).label("total_pnl"),
+            func.coalesce(func.avg(Execution.pnl), 0).label("avg_pnl"),
+        )
+        .join(Signal, Execution.signal_id == Signal.id)
+        .where(*base_filters, Execution.signal_id.isnot(None))
+        .group_by(Signal.symbol)
+    )
+    # Bybit signals
+    bb_sym_q = (
+        select(
+            BybitSignal.symbol,
+            func.count(Execution.id).label("trades"),
+            func.count(case((Execution.pnl > 0, 1))).label("wins"),
+            func.count(case((Execution.pnl <= 0, 1))).label("losses"),
+            func.coalesce(func.sum(Execution.pnl), 0).label("total_pnl"),
+            func.coalesce(func.avg(Execution.pnl), 0).label("avg_pnl"),
+        )
+        .join(BybitSignal, Execution.bybit_signal_id == BybitSignal.id)
+        .where(*base_filters, Execution.bybit_signal_id.isnot(None))
+        .group_by(BybitSignal.symbol)
+    )
+
+    hl_sym_rows = (await db.execute(hl_sym_q)).all()
+    bb_sym_rows = (await db.execute(bb_sym_q)).all()
+
+    # Merge by symbol name
+    sym_map: dict[str, dict] = {}
+    for r in list(hl_sym_rows) + list(bb_sym_rows):
+        s = r.symbol
+        if s not in sym_map:
+            sym_map[s] = {
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "total_pnl": 0.0,
+                "avg_pnl_sum": 0.0,
+                "count": 0,
+            }
+        sym_map[s]["trades"] += r.trades
+        sym_map[s]["wins"] += r.wins
+        sym_map[s]["losses"] += r.losses
+        sym_map[s]["total_pnl"] += float(r.total_pnl)
+        sym_map[s]["avg_pnl_sum"] += float(r.avg_pnl) * r.trades
+        sym_map[s]["count"] += r.trades
+
+    by_symbol = sorted(
+        [
+            SymbolTradingStats(
+                symbol=s,
+                trades=d["trades"],
+                wins=d["wins"],
+                losses=d["losses"],
+                total_pnl=round(d["total_pnl"], 2),
+                avg_pnl=round(d["avg_pnl_sum"] / d["count"], 2)
+                if d["count"] > 0
+                else 0.0,
+            )
+            for s, d in sym_map.items()
+        ],
+        key=lambda x: x.total_pnl,
+        reverse=True,
+    )[:20]
+
+    # ── 7. By strategy type ──────────────────────────────────
+    st_q = (
+        select(
+            Strategy.strategy_type,
+            func.count(Execution.id).label("trades"),
+            func.count(case((Execution.pnl > 0, 1))).label("wins"),
+            func.coalesce(func.sum(Execution.pnl), 0).label("total_pnl"),
+        )
+        .join(Strategy, Execution.strategy_id == Strategy.id)
+        .where(*base_filters)
+        .group_by(Strategy.strategy_type)
+    )
+    st_rows = (await db.execute(st_q)).all()
+    by_strategy_type = [
+        StrategyTypeStats(
+            strategy_type=r.strategy_type.value
+            if hasattr(r.strategy_type, "value")
+            else str(r.strategy_type),
+            trades=r.trades,
+            wins=r.wins,
+            total_pnl=round(float(r.total_pnl), 2),
+        )
+        for r in st_rows
+    ]
+
+    # ── 8. Signal funnel (HL + Bybit combined) ───────────────
+    hl_gen = (
+        await db.execute(
+            select(func.count(Signal.id)).where(
+                Signal.created_at >= since, Signal.created_at <= until
+            )
+        )
+    ).scalar() or 0
+    hl_filled = (
+        await db.execute(
+            select(func.count(Signal.id)).where(
+                Signal.status == SignalStatus.FILLED,
+                Signal.created_at >= since,
+                Signal.created_at <= until,
+            )
+        )
+    ).scalar() or 0
+
+    bb_gen = (
+        await db.execute(
+            select(func.count(BybitSignal.id)).where(
+                BybitSignal.created_at >= since, BybitSignal.created_at <= until
+            )
+        )
+    ).scalar() or 0
+    bb_filled = (
+        await db.execute(
+            select(func.count(BybitSignal.id)).where(
+                BybitSignal.status == SignalStatus.FILLED,
+                BybitSignal.created_at >= since,
+                BybitSignal.created_at <= until,
+            )
+        )
+    ).scalar() or 0
+
+    generated = hl_gen + bb_gen
+    filled_signals = hl_filled + bb_filled
+
+    # Executed = signals that have at least one execution
+    executed_hl = (
+        await db.execute(
+            select(func.count(func.distinct(Execution.signal_id))).where(
+                Execution.signal_id.isnot(None),
+                Execution.created_at >= since,
+                Execution.created_at <= until,
+            )
+        )
+    ).scalar() or 0
+    executed_bb = (
+        await db.execute(
+            select(func.count(func.distinct(Execution.bybit_signal_id))).where(
+                Execution.bybit_signal_id.isnot(None),
+                Execution.created_at >= since,
+                Execution.created_at <= until,
+            )
+        )
+    ).scalar() or 0
+    executed = executed_hl + executed_bb
+
+    # Profitable = filled executions with pnl > 0
+    profitable = (
+        await db.execute(
+            select(func.count(Execution.id)).where(
+                Execution.status.in_(closed_statuses),
+                Execution.pnl > 0,
+                Execution.created_at >= since,
+                Execution.created_at <= until,
+            )
+        )
+    ).scalar() or 0
+
+    signal_funnel = SignalFunnel(
+        generated=generated,
+        executed=executed,
+        filled=filled_signals,
+        profitable=profitable,
+        conversion_rate=round(
+            (filled_signals / generated * 100) if generated > 0 else 0.0, 1
+        ),
+        profitability_rate=round(
+            (profitable / filled_signals * 100) if filled_signals > 0 else 0.0, 1
+        ),
+    )
+
+    # ── 9. Recent trades (last 20) ───────────────────────────
+    recent_filters = [Execution.created_at >= since, Execution.created_at <= until]
+    if exchange:
+        recent_filters.append(Execution.exchange == exchange)
+
+    recent_q = (
+        select(Execution)
+        .where(*recent_filters)
+        .order_by(Execution.created_at.desc())
+        .limit(20)
+    )
+    recent_rows = (await db.execute(recent_q)).scalars().all()
+
+    # Get symbols for recent trades
+    recent_signal_ids = [r.signal_id for r in recent_rows if r.signal_id]
+    recent_bb_ids = [r.bybit_signal_id for r in recent_rows if r.bybit_signal_id]
+
+    sig_symbols: dict[str, str] = {}
+    if recent_signal_ids:
+        sig_q = select(Signal.id, Signal.symbol).where(Signal.id.in_(recent_signal_ids))
+        for row in (await db.execute(sig_q)).all():
+            sig_symbols[str(row[0])] = row[1]
+    if recent_bb_ids:
+        bb_q = select(BybitSignal.id, BybitSignal.symbol).where(
+            BybitSignal.id.in_(recent_bb_ids)
+        )
+        for row in (await db.execute(bb_q)).all():
+            sig_symbols[str(row[0])] = row[1]
+
+    recent_trades = []
+    for r in recent_rows:
+        sym = "?"
+        if r.signal_id and str(r.signal_id) in sig_symbols:
+            sym = sig_symbols[str(r.signal_id)]
+        elif r.bybit_signal_id and str(r.bybit_signal_id) in sig_symbols:
+            sym = sig_symbols[str(r.bybit_signal_id)]
+        recent_trades.append(
+            RecentTrade(
+                id=str(r.id),
+                symbol=sym,
+                direction=r.direction.value
+                if hasattr(r.direction, "value")
+                else str(r.direction),
+                exchange=r.exchange.value
+                if hasattr(r.exchange, "value")
+                else str(r.exchange),
+                pnl=round(float(r.pnl), 2) if r.pnl is not None else None,
+                status=r.status.value if hasattr(r.status, "value") else str(r.status),
+                entry_price=float(r.entry_price),
+                exit_price=float(r.exit_price) if r.exit_price else None,
+                leverage=float(r.leverage),
+                created_at=r.created_at.isoformat(),
+            )
+        )
+
+    return PerformanceAnalyticsResponse(
+        total_trades=total_trades,
+        win_rate=win_rate,
+        loss_rate=loss_rate,
+        total_pnl=round(float(agg.total_pnl), 2),
+        avg_pnl=round(float(agg.avg_pnl), 2),
+        profit_factor=profit_factor,
+        sharpe_ratio=sharpe_ratio,
+        max_drawdown=round(max_drawdown, 2),
+        best_trade=round(float(agg.best_trade), 2),
+        worst_trade=round(float(agg.worst_trade), 2),
+        trade_volume=round(float(agg.trade_volume), 2),
+        active_users=agg.active_users,
+        pnl_by_day=pnl_by_day,
+        cumulative_pnl_by_day=cumulative_pnl_by_day,
+        executions_by_day=executions_by_day,
+        by_exchange=by_exchange,
+        by_direction=by_direction,
+        by_symbol=by_symbol,
+        by_strategy_type=by_strategy_type,
+        signal_funnel=signal_funnel,
+        recent_trades=recent_trades,
+    )
