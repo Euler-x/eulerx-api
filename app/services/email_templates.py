@@ -140,16 +140,17 @@ def strategy_paused(
 def signal_generated(
     strategy_name: str,
     signal_count: int,
+    exchange: str = "hyperliquid",
 ) -> tuple[str, str]:
     """Signals generated notification."""
-    subject = (
-        f"{signal_count} New Signal{'s' if signal_count != 1 else ''} — {strategy_name}"
-    )
+    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
+    subject = f"{signal_count} New Signal{'s' if signal_count != 1 else ''} — {ex_label} — {strategy_name}"
     body = _load("signal_generated").format(
         strategy_name=strategy_name,
         signal_count=signal_count,
         signal_plural="s" if signal_count != 1 else "",
         frontend_url=settings.frontend_url,
+        exchange=ex_label,
     )
     return subject, _render(subject, body)
 

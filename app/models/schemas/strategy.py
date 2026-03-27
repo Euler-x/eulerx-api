@@ -21,6 +21,7 @@ class StrategyCreate(BaseModel):
     timeframe: Optional[StrategyTimeframe] = None
     target_return_min: Optional[float] = Field(None, ge=0)
     target_return_max: Optional[float] = Field(None, ge=0)
+    target_exchange: str = Field(default="both", pattern=r"^(hyperliquid|bybit|both)$")
 
 
 class StrategyUpdate(BaseModel):
@@ -36,6 +37,7 @@ class StrategyUpdate(BaseModel):
     timeframe: Optional[StrategyTimeframe] = None
     target_return_min: Optional[float] = Field(None, ge=0)
     target_return_max: Optional[float] = Field(None, ge=0)
+    target_exchange: Optional[str] = Field(None, pattern=r"^(hyperliquid|bybit|both)$")
 
 
 class StrategyResponse(BaseModel):
@@ -49,6 +51,7 @@ class StrategyResponse(BaseModel):
     allocation_pct: float
     max_drawdown_percent: float
     is_active: bool
+    target_exchange: str = "both"
     daily_loss_cap_percent: Optional[float] = None
     target_volatility: Optional[float] = None
     expected_volatility: Optional[float] = None

@@ -78,6 +78,11 @@ class Strategy(Base, TimestampMixin):
         Float, nullable=True, default=None
     )
 
+    # Exchange targeting: "hyperliquid", "bybit", or "both" (default)
+    target_exchange: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="both", server_default="both"
+    )
+
     # Auto-pause tracking
     paused_reason: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True, default=None

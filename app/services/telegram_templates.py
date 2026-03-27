@@ -69,10 +69,14 @@ def stop_loss_hit(
     )
 
 
-def signal_generated(strategy_name: str, signal_count: int) -> str:
+def signal_generated(
+    strategy_name: str, signal_count: int, exchange: str = "hyperliquid"
+) -> str:
     plural = "s" if signal_count != 1 else ""
+    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
     return (
-        f"\U0001f4e1 <b>{signal_count} New Signal{plural}</b>\n\n"
+        f"\U0001f4e1 <b>{signal_count} New Signal{plural}</b> \u2014 {ex_label}\n\n"
+        f"<b>Exchange:</b> {ex_label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"{signal_count} new trading signal{plural} ready for execution."
     )

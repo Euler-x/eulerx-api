@@ -217,6 +217,14 @@ async def _execute_signal_for_strategy_async(
 
             user = strategy.user
 
+            # Check strategy targets this exchange
+            target = getattr(strategy, "target_exchange", "both")
+            if target != "both" and target != exchange:
+                return {
+                    "status": "skipped",
+                    "reason": f"Strategy targets {target}, signal is {exchange}",
+                }
+
             # Check exchange compatibility — skip early without creating
             # a failed execution record (avoids DB noise)
             if is_bybit_signal and not user.bybit_configured:
@@ -279,6 +287,7 @@ async def _execute_signal_for_strategy_async(
                     user=user,
                     strategy_name=strategy.name,
                     signal_count=1,
+                    exchange=exchange,
                 )
             except Exception as e:
                 logger.error("Failed to send signal notification: %s", e)

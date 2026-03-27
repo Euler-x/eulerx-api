@@ -459,15 +459,20 @@ class NotificationService:
         user: User,
         strategy_name: str,
         signal_count: int,
+        exchange: str = "hyperliquid",
     ) -> None:
         """Category: signals. Rate-limited."""
         if not self._check_notification_rate(user, "signal_generated"):
             return
 
-        subject, html = email_templates.signal_generated(strategy_name, signal_count)
+        subject, html = email_templates.signal_generated(
+            strategy_name, signal_count, exchange
+        )
         await self._dispatch_email(user, "signals", subject, html)
 
-        text = telegram_templates.signal_generated(strategy_name, signal_count)
+        text = telegram_templates.signal_generated(
+            strategy_name, signal_count, exchange
+        )
         await self._dispatch_telegram(user, "signals", text)
 
     async def send_support_ticket_update(
