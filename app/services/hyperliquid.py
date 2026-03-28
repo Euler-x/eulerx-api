@@ -276,12 +276,18 @@ class HyperliquidService:
                 low_24h = min(lows)
                 open_24h = opens[0]
                 close_latest = closes[-1]
-                price_change_24h = ((close_latest - open_24h) / open_24h) * 100
+                price_change_24h = (
+                    ((close_latest - open_24h) / open_24h) * 100 if open_24h > 0 else 0
+                )
                 total_volume = sum(volumes)
                 avg_volume = total_volume / len(volumes) if volumes else 0
 
                 # Simple volatility: (high - low) / mid as percentage
-                volatility = ((high_24h - low_24h) / close_latest) * 100
+                volatility = (
+                    ((high_24h - low_24h) / close_latest) * 100
+                    if close_latest > 0
+                    else 0
+                )
 
                 # Recent trend: last 6 candles (1h)
                 recent_closes = closes[-6:]

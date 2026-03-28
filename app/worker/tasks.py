@@ -190,8 +190,14 @@ async def _execute_signal_for_strategy_async(
             is_bybit_signal = exchange == "bybit"
             SignalModel = BybitSignal if is_bybit_signal else Signal
 
+            try:
+                signal_uuid = uuid.UUID(signal_id)
+                strategy_uuid = uuid.UUID(strategy_id)
+            except ValueError:
+                return {"status": "skipped", "reason": "Invalid ID format"}
+
             signal_result = await session.execute(
-                select(SignalModel).where(SignalModel.id == uuid.UUID(signal_id))
+                select(SignalModel).where(SignalModel.id == signal_uuid)
             )
             signal = signal_result.scalar_one_or_none()
             if signal is None:
@@ -209,7 +215,7 @@ async def _execute_signal_for_strategy_async(
             strategy_result = await session.execute(
                 select(Strategy)
                 .options(selectinload(Strategy.user))
-                .where(Strategy.id == uuid.UUID(strategy_id))
+                .where(Strategy.id == strategy_uuid)
             )
             strategy = strategy_result.scalar_one_or_none()
             if strategy is None or not strategy.is_active:

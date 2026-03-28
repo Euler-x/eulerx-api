@@ -855,7 +855,7 @@ class ATEService:
             for execution in executions:
                 signal = execution.signal
                 strategy = execution.strategy
-                if not signal or not user:
+                if not signal or not strategy:
                     continue
 
                 symbol = signal.symbol
