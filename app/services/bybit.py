@@ -625,6 +625,29 @@ class BybitService:
 
         return await asyncio.to_thread(_fetch)
 
+    async def get_closed_pnl(
+        self, api_key: str, api_secret: str, symbol: str
+    ) -> dict | None:
+        """Get the most recent closed PnL record for a symbol."""
+
+        def _fetch():
+            session = self._get_session(api_key, api_secret)
+            resp = session.get_closed_pnl(category="linear", symbol=symbol, limit=1)
+            if resp["retCode"] != 0:
+                return None
+            records = resp["result"]["list"]
+            if not records:
+                return None
+            r = records[0]
+            return {
+                "pnl": float(r.get("closedPnl", 0)),
+                "exit_price": float(r.get("avgExitPrice", 0)),
+                "entry_price": float(r.get("avgEntryPrice", 0)),
+                "symbol": r.get("symbol", ""),
+            }
+
+        return await asyncio.to_thread(_fetch)
+
     async def update_leverage(
         self, api_key: str, api_secret: str, symbol: str, leverage: int
     ) -> dict:

@@ -743,6 +743,7 @@ class ATEService:
             select(Execution)
             .options(
                 selectinload(Execution.signal),
+                selectinload(Execution.bybit_signal),
                 selectinload(Execution.strategy),
                 selectinload(Execution.user),
             )
@@ -760,7 +761,11 @@ class ATEService:
         hl_executions: list[Execution] = []
         bybit_executions: list[Execution] = []
         for ex in open_executions:
-            if not ex.user or not ex.signal:
+            if not ex.user:
+                continue
+            # Must have either HL signal or Bybit signal
+            has_signal = ex.signal is not None or ex.bybit_signal is not None
+            if not has_signal:
                 continue
             ex_exchange = getattr(ex, "exchange", Exchange.HYPERLIQUID)
             if ex_exchange == Exchange.BYBIT:
@@ -853,7 +858,7 @@ class ATEService:
             bybit_positions = await user_bybit.get_user_positions(api_key, api_secret)
 
             for execution in executions:
-                signal = execution.signal
+                signal = execution.bybit_signal or execution.signal
                 strategy = execution.strategy
                 if not signal or not strategy:
                     continue
@@ -866,20 +871,26 @@ class ATEService:
                 if bb_pos is not None:
                     continue
 
-                # Position gone on Bybit — calculate PnL from entry
-                # Bybit doesn't have a fills API as easy as HL, use mark price
-                exit_price = entry_price  # fallback
-                # Try to get current price for a better estimate
+                # Position gone on Bybit — get actual PnL from closed PnL API
+                exit_price = entry_price
+                closed_pnl = 0.0
                 try:
-                    tickers = await user_bybit.get_all_tickers()
-                    for t in tickers:
-                        if t.get("symbol") == symbol:
-                            exit_price = float(t.get("lastPrice", entry_price))
-                            break
-                except Exception:
-                    pass
-
-                closed_pnl = 0.0  # will be calculated in reconcile
+                    closed_pnl_data = await user_bybit.get_closed_pnl(
+                        api_key, api_secret, symbol
+                    )
+                    if closed_pnl_data:
+                        exit_price = closed_pnl_data.get("exit_price", entry_price)
+                        closed_pnl = closed_pnl_data.get("pnl", 0.0)
+                        logger.info(
+                            "Bybit closed PnL for %s: exit=%.8f pnl=%.4f",
+                            symbol,
+                            exit_price,
+                            closed_pnl,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to get Bybit closed PnL for %s: %s", symbol, e
+                    )
 
                 result_entry = self._reconcile_closed_position(
                     execution,
