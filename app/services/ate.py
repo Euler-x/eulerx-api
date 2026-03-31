@@ -433,18 +433,35 @@ class ATEService:
                 return execution
             api_key, api_secret = bybit_keys
 
-            # Set leverage
+            # Set leverage — retry with lower values if symbol has a cap
+            actual_leverage = target_leverage
             if target_leverage >= 1:
-                lev_result = await user_bybit.update_leverage(
-                    api_key, api_secret, signal.symbol, target_leverage
-                )
-                if not lev_result.get("success"):
+                for lev in [target_leverage, 10, 5, 3, 1]:
+                    lev_result = await user_bybit.update_leverage(
+                        api_key, api_secret, signal.symbol, lev
+                    )
+                    if lev_result.get("success"):
+                        actual_leverage = lev
+                        break
+                    err = str(lev_result.get("error", ""))
+                    if "not modified" in err:
+                        actual_leverage = lev
+                        break
+                    if "maxLeverage" in err or "110043" in err:
+                        continue  # try next lower leverage
                     logger.warning(
                         "Failed to set Bybit leverage to %dx for %s: %s",
-                        target_leverage,
+                        lev,
                         signal.symbol,
-                        lev_result.get("error"),
+                        err,
                     )
+                    break
+
+            # Recalculate position size if leverage was reduced
+            if actual_leverage != target_leverage and actual_leverage > 0:
+                ratio = actual_leverage / target_leverage
+                quantity = round(quantity * ratio, 4)
+                notional = quantity * entry_price
 
             logger.info(
                 "Placing Bybit order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
@@ -454,7 +471,7 @@ class ATEService:
                 quantity,
                 entry_price,
                 notional,
-                target_leverage,
+                actual_leverage,
                 user.id,
                 strategy.id,
             )
