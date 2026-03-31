@@ -32,11 +32,11 @@ from withdrawing or transferring your capital.
 Entity: Bayes Euler Ltd. (BVI). US/UK/EU/Singapore registrations in progress.
 Classification: Technology services provider (not broker/custodian/adviser).
 
-Plans:
-  ATE Core  $100/mo — 1 exchange, daily signals, core risk controls, Telegram alerts.
-  ATE Pro   $250/mo — both exchanges, advanced strategy builder, analytics, multi-strategy.
-  ATE Prime $500/mo — institutional-grade, vault access, dedicated support, white-glove onboarding.
-  Institutional — custom pricing, multi-LP vaults, contact finance@eulerx.io.
+Plan:
+  EulerX ATE — $250/month. Full access to everything: both exchanges (HyperLiquid + Bybit),
+  unlimited strategies, advanced analytics, Telegram alerts, priority execution, AI consensus
+  signals with full reasoning, and dedicated support. 7-day free trial available.
+  No tiers, no feature gates — one plan, complete access.
 
 Connecting Hyperliquid:
   1. Create account at hyperliquid.xyz, deposit into wallet.
