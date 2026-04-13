@@ -35,7 +35,7 @@ else:
     from sqlalchemy.pool import NullPool
 
     is_celery = sys.argv and "celery" in sys.argv[0]
-    
+
     if is_celery:
         engine = create_async_engine(
             settings.database_url,
