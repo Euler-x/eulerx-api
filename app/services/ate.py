@@ -264,12 +264,21 @@ class ATEService:
         # ── Per-(signal, strategy) idempotency ───────────────────────
         # Signals are shared across strategies. Prevent the same strategy
         # from executing the same signal twice.
-        existing = await db.execute(
-            select(func.count(Execution.id)).where(
-                Execution.signal_id == signal.id,
-                Execution.strategy_id == strategy.id,
+        # For Bybit signals, signal_id is NULL — check bybit_signal_id instead.
+        if isinstance(signal, BybitSignal):
+            existing = await db.execute(
+                select(func.count(Execution.id)).where(
+                    Execution.bybit_signal_id == signal.id,
+                    Execution.strategy_id == strategy.id,
+                )
             )
-        )
+        else:
+            existing = await db.execute(
+                select(func.count(Execution.id)).where(
+                    Execution.signal_id == signal.id,
+                    Execution.strategy_id == strategy.id,
+                )
+            )
         if (existing.scalar() or 0) > 0:
             logger.info(
                 "Signal %s already executed by strategy %s, skipping",
@@ -460,7 +469,7 @@ class ATEService:
             # Recalculate position size if leverage was reduced
             if actual_leverage != target_leverage and actual_leverage > 0:
                 ratio = actual_leverage / target_leverage
-                quantity = round(quantity * ratio, 4)
+                quantity = round(quantity * ratio, sz_decimals)
                 notional = quantity * entry_price
 
             logger.info(
@@ -476,48 +485,10 @@ class ATEService:
                 strategy.id,
             )
 
-            tp_price = float(signal.take_profit) if signal.take_profit else None
-            sl_price = float(signal.stop_loss) if signal.stop_loss else None
-
-            # Bybit validates TP/SL against current market price (lastPrice).
-            # If price has moved and TP/SL are now invalid, drop them from the
-            # order rather than fabricating new prices. The position monitor
-            # will handle exits based on the signal's original TP/SL.
-            try:
-                ticker = await user_bybit.get_ticker(signal.symbol)
-                last_price = float(ticker.get("lastPrice", 0)) if ticker else 0
-            except Exception:
-                last_price = entry_price
-
-            if last_price > 0 and tp_price and sl_price:
-                tp_valid = True
-                sl_valid = True
-                if is_buy:
-                    if tp_price <= last_price:
-                        tp_valid = False
-                    if sl_price >= last_price:
-                        sl_valid = False
-                else:
-                    if tp_price >= last_price:
-                        tp_valid = False
-                    if sl_price <= last_price:
-                        sl_valid = False
-
-                if not tp_valid or not sl_valid:
-                    logger.warning(
-                        "Bybit TP/SL invalid vs lastPrice=%.8f for %s %s "
-                        "(tp=%.8f valid=%s, sl=%.8f valid=%s) — sending order without TP/SL",
-                        last_price,
-                        "BUY" if is_buy else "SELL",
-                        signal.symbol,
-                        tp_price,
-                        tp_valid,
-                        sl_price,
-                        sl_valid,
-                    )
-                    tp_price = None
-                    sl_price = None
-
+            # Place market order WITHOUT inline TP/SL.
+            # TP/SL will be set separately after fill via set_trading_stop,
+            # which validates against the actual fill price and avoids
+            # rejections when the market has moved past the signal's targets.
             order_result = await user_bybit.place_order(
                 api_key=api_key,
                 api_secret=api_secret,
@@ -525,8 +496,6 @@ class ATEService:
                 is_buy=is_buy,
                 size=quantity,
                 order_type="market",
-                take_profit=tp_price,
-                stop_loss=sl_price,
             )
 
             if order_result.get("success"):
@@ -627,11 +596,51 @@ class ATEService:
                 asset=signal.symbol,
             )
 
-            # Place TP/SL (Bybit does it inline with order, HL needs separate calls)
-            if not is_bybit:
-                tp_price = float(signal.take_profit) if signal.take_profit else None
-                sl_price = float(signal.stop_loss) if signal.stop_loss else None
-                if tp_price or sl_price:
+            # Place TP/SL after fill
+            tp_price = float(signal.take_profit) if signal.take_profit else None
+            sl_price = float(signal.stop_loss) if signal.stop_loss else None
+
+            if is_bybit:
+                # Bybit: use set_trading_stop (tick-size rounding handled
+                # inside place_tp_sl_orders)
+                if tp_price is not None or sl_price is not None:
+                    try:
+                        bybit_keys = self._get_bybit_keys(user)
+                        if bybit_keys:
+                            api_key, api_secret = bybit_keys
+                            user_bybit = self._get_user_bybit_service(user)
+                            tpsl_result = await user_bybit.place_tp_sl_orders(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                symbol=signal.symbol,
+                                is_buy=is_buy,
+                                take_profit_price=tp_price,
+                                stop_loss_price=sl_price,
+                            )
+                            if tpsl_result.get("success"):
+                                logger.info(
+                                    "Bybit TP/SL set for %s: tp=$%s sl=$%s",
+                                    signal.symbol,
+                                    tp_price,
+                                    sl_price,
+                                )
+                            else:
+                                logger.warning(
+                                    "Bybit set_trading_stop failed for %s: %s "
+                                    "— position is open without TP/SL, "
+                                    "monitor will handle exits",
+                                    signal.symbol,
+                                    tpsl_result.get("error"),
+                                )
+                    except Exception as e:
+                        logger.error(
+                            "Exception setting Bybit TP/SL for %s: %s",
+                            signal.symbol,
+                            e,
+                        )
+            else:
+                # Hyperliquid: separate TP/SL order calls
+                if tp_price is not None or sl_price is not None:
                     try:
                         tpsl_result = await self.hyperliquid.place_tp_sl_orders(
                             wallet_private_key=private_key,

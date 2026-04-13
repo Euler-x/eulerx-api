@@ -130,4 +130,9 @@ class Execution(Base):
             "strategy_id",
             name="uq_execution_signal_strategy",
         ),
+        UniqueConstraint(
+            "bybit_signal_id",
+            "strategy_id",
+            name="uq_execution_bybit_signal_strategy",
+        ),
     )

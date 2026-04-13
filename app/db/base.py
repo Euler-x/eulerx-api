@@ -31,14 +31,26 @@ if _is_sqlite:
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 else:
-    engine = create_async_engine(
-        settings.database_url,
-        echo=settings.debug,
-        pool_size=20,
-        max_overflow=10,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-    )
+    import sys
+    from sqlalchemy.pool import NullPool
+
+    is_celery = sys.argv and "celery" in sys.argv[0]
+    
+    if is_celery:
+        engine = create_async_engine(
+            settings.database_url,
+            echo=settings.debug,
+            poolclass=NullPool,
+        )
+    else:
+        engine = create_async_engine(
+            settings.database_url,
+            echo=settings.debug,
+            pool_size=20,
+            max_overflow=10,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+        )
 
 async_session_factory = async_sessionmaker(
     engine,

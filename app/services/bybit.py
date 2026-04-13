@@ -671,6 +671,30 @@ class BybitService:
 
         return await asyncio.to_thread(_set)
 
+    @staticmethod
+    def round_to_tick(price: float, tick_size: float) -> float:
+        """Round a price to the nearest valid tick size.
+
+        Bybit rejects TP/SL prices that aren't exact multiples of the
+        instrument's tickSize (e.g. 0.10 for BTCUSDT).
+        """
+        if tick_size <= 0:
+            return price
+        # Determine decimal precision from tick_size itself
+        tick_str = f"{tick_size:.10f}".rstrip("0")
+        decimals = len(tick_str.split(".")[-1]) if "." in tick_str else 0
+        rounded = round(round(price / tick_size) * tick_size, decimals)
+        return rounded
+
+    async def get_tick_size(self, symbol: str) -> float:
+        """Get the price tick size for a symbol (for TP/SL rounding)."""
+        try:
+            info = await self.get_instrument_info(symbol)
+            price_filter = info.get("priceFilter", {})
+            return float(price_filter.get("tickSize", "0.01"))
+        except Exception:
+            return 0.01
+
     async def place_order(
         self,
         api_key: str,
@@ -701,9 +725,9 @@ class BybitService:
                 params["timeInForce"] = "GTC"
             if reduce_only:
                 params["reduceOnly"] = True
-            if take_profit:
+            if take_profit is not None:
                 params["takeProfit"] = str(take_profit)
-            if stop_loss:
+            if stop_loss is not None:
                 params["stopLoss"] = str(stop_loss)
 
             try:
@@ -726,12 +750,22 @@ class BybitService:
         api_key: str,
         api_secret: str,
         symbol: str,
-        size: float,
         is_buy: bool,
         take_profit_price: float | None = None,
         stop_loss_price: float | None = None,
     ) -> dict:
-        """Set TP/SL on an existing position via trading-stop endpoint."""
+        """Set TP/SL on an existing position via trading-stop endpoint.
+
+        Prices are rounded to the instrument's tick size before submission.
+        The `size` parameter was removed — Bybit's Full tpslMode applies
+        TP/SL to the entire position automatically.
+        """
+        # Round prices to tick size to prevent Bybit rejection
+        tick_size = await self.get_tick_size(symbol)
+        if take_profit_price is not None:
+            take_profit_price = self.round_to_tick(take_profit_price, tick_size)
+        if stop_loss_price is not None:
+            stop_loss_price = self.round_to_tick(stop_loss_price, tick_size)
 
         def _set():
             session = self._get_session(api_key, api_secret)
@@ -741,9 +775,9 @@ class BybitService:
                 "tpslMode": "Full",
                 "positionIdx": 0,
             }
-            if take_profit_price:
+            if take_profit_price is not None:
                 params["takeProfit"] = str(take_profit_price)
-            if stop_loss_price:
+            if stop_loss_price is not None:
                 params["stopLoss"] = str(stop_loss_price)
 
             try:
