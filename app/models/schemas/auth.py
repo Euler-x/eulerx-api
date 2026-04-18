@@ -36,11 +36,17 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8)
     referral_code: Optional[str] = None
+    cf_turnstile_token: str = Field(
+        ..., description="Cloudflare Turnstile challenge token"
+    )
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    cf_turnstile_token: str = Field(
+        ..., description="Cloudflare Turnstile challenge token"
+    )
 
 
 class UserResponse(BaseModel):
@@ -90,6 +96,9 @@ class EmailVerificationResponse(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+    cf_turnstile_token: str = Field(
+        ..., description="Cloudflare Turnstile challenge token"
+    )
 
 
 class ResetPasswordRequest(BaseModel):

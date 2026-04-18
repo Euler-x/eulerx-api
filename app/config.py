@@ -56,6 +56,12 @@ class Settings(BaseSettings):
         description="Sentry DSN for error tracking. Empty = disabled.",
     )
 
+    # Cloudflare Turnstile
+    cf_turnstile_secret_key: str = Field(
+        default="",
+        description="Cloudflare Turnstile secret key for server-side token verification. Empty = skip (dev only).",
+    )
+
     @model_validator(mode="after")
     def _validate_critical_settings(self):
         if self.environment == "production":

@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,7 @@ from app.models.schemas.auth import (
 )
 from app.models.user import User
 from app.services.notifications import NotificationService
+from app.services.turnstile import verify_turnstile
 from app.services.wallet import WalletService
 from app.utils.helpers import generate_referral_code, utc_now
 from app.utils.security import (
@@ -49,9 +50,15 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post("/register", response_model=AuthResponse)
 async def register(
     request: RegisterRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new user with email and password."""
+    await verify_turnstile(
+        request.cf_turnstile_token,
+        http_request.client.host if http_request.client else None,
+    )
+
     existing = await db.execute(select(User).where(User.email == request.email))
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -100,9 +107,15 @@ async def register(
 @router.post("/login", response_model=AuthResponse)
 async def login(
     request: LoginRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Login with email and password."""
+    await verify_turnstile(
+        request.cf_turnstile_token,
+        http_request.client.host if http_request.client else None,
+    )
+
     result = await db.execute(select(User).where(User.email == request.email))
     user = result.scalar_one_or_none()
 
@@ -391,6 +404,7 @@ async def verify_email(
 @router.post("/forgot-password", response_model=PasswordResetResponse)
 async def forgot_password(
     request: ForgotPasswordRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Request a password reset email.
@@ -398,6 +412,11 @@ async def forgot_password(
     Always returns the same message to prevent email enumeration.
     Only email/password accounts can reset their password.
     """
+    await verify_turnstile(
+        request.cf_turnstile_token,
+        http_request.client.host if http_request.client else None,
+    )
+
     _GENERIC = "If that email is registered, you'll receive a reset link shortly."
 
     result = await db.execute(select(User).where(User.email == request.email))
