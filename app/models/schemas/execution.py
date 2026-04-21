@@ -37,3 +37,9 @@ class ExecutionVerifyResponse(BaseModel):
     tx_hash: Optional[str]
     verified: bool
     verification_link: Optional[str]
+
+
+class CloseExecutionResponse(BaseModel):
+    execution: ExecutionResponse
+    message: str
+    already_closed_on_exchange: bool
