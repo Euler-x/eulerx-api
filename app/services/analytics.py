@@ -41,10 +41,10 @@ class AnalyticsService:
 
     @staticmethod
     def win_rate(executions: list[Execution]) -> float:
-        if not executions:
-            return 0.0
-        winning = sum(1 for e in executions if float(e.pnl) > 0)
-        return round(winning / len(executions) * 100, 2)
+        gross_profit = sum(float(e.pnl) for e in executions if float(e.pnl) > 0)
+        gross_loss = abs(sum(float(e.pnl) for e in executions if float(e.pnl) < 0))
+        total = gross_profit + gross_loss
+        return round(gross_profit / total * 100, 2) if total > 0 else 0.0
 
     @staticmethod
     def profit_factor(executions: list[Execution]) -> float:

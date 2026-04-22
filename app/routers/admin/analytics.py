@@ -396,25 +396,26 @@ async def admin_dashboard(db: AsyncSession = Depends(get_db)):
         or 0
     )
 
-    # Win rate: % of closed executions with positive PnL
+    # Win rate: gross profit as % of (gross profit + gross loss)
     closed_statuses = [ExecutionStatus.CLOSED, ExecutionStatus.FILLED]
-    closed_total = (
+    pnl_agg = (
         await db.execute(
-            select(func.count(Execution.id)).where(
+            select(
+                func.coalesce(
+                    func.sum(case((Execution.pnl > 0, Execution.pnl), else_=0)), 0
+                ).label("gross_profit"),
+                func.coalesce(
+                    func.sum(case((Execution.pnl < 0, Execution.pnl), else_=0)), 0
+                ).label("gross_loss"),
+            ).where(
                 Execution.status.in_(closed_statuses),
                 Execution.pnl.isnot(None),
             )
         )
-    ).scalar() or 0
-    wins = (
-        await db.execute(
-            select(func.count(Execution.id)).where(
-                Execution.status.in_(closed_statuses),
-                Execution.pnl > 0,
-            )
-        )
-    ).scalar() or 0
-    win_rate = round((wins / closed_total * 100) if closed_total > 0 else 0.0, 2)
+    ).one()
+    _gp = float(pnl_agg.gross_profit)
+    _gl = abs(float(pnl_agg.gross_loss))
+    win_rate = round(_gp / (_gp + _gl) * 100 if (_gp + _gl) > 0 else 0.0, 2)
 
     # -- Strategies --
     active_strategies = (
@@ -493,10 +494,27 @@ async def admin_trading_analytics(
     ).one()
 
     total_trades = agg.total_trades
-    wins = agg.wins
-    losses = agg.losses
-    win_rate = round((wins / total_trades * 100) if total_trades > 0 else 0.0, 2)
-    loss_rate = round((losses / total_trades * 100) if total_trades > 0 else 0.0, 2)
+    # Win rate: gross profit as % of (gross profit + gross loss)
+    pnl_sums = (
+        await db.execute(
+            select(
+                func.coalesce(
+                    func.sum(case((Execution.pnl > 0, Execution.pnl), else_=0)), 0
+                ).label("gross_profit"),
+                func.coalesce(
+                    func.sum(case((Execution.pnl < 0, Execution.pnl), else_=0)), 0
+                ).label("gross_loss"),
+            ).where(
+                Execution.status.in_(closed_statuses),
+                Execution.pnl.isnot(None),
+                Execution.created_at >= since,
+            )
+        )
+    ).one()
+    _gp = float(pnl_sums.gross_profit)
+    _gl = abs(float(pnl_sums.gross_loss))
+    win_rate = round(_gp / (_gp + _gl) * 100 if (_gp + _gl) > 0 else 0.0, 2)
+    loss_rate = round(100 - win_rate if total_trades > 0 else 0.0, 2)
 
     # -- PnL by day --
     pnl_by_day_q = (
@@ -984,12 +1002,15 @@ async def admin_performance_analytics(
     ).one()
 
     total_trades = agg.total_trades
-    wins = agg.wins
-    win_rate = round((wins / total_trades * 100) if total_trades > 0 else 0.0, 2)
-    loss_rate = round(100 - win_rate if total_trades > 0 else 0.0, 2)
-
     gross_profit = float(agg.gross_profit)
     gross_loss = abs(float(agg.gross_loss))
+    win_rate = round(
+        gross_profit / (gross_profit + gross_loss) * 100
+        if (gross_profit + gross_loss) > 0
+        else 0.0,
+        2,
+    )
+    loss_rate = round(100 - win_rate if total_trades > 0 else 0.0, 2)
     profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0.0
 
     # ── 2. PnL by day + cumulative + Sharpe + max drawdown ──
