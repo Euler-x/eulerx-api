@@ -17,8 +17,9 @@ async def verify_turnstile(token: str, ip: str | None = None) -> None:
     settings = get_settings()
     secret = settings.cf_turnstile_secret_key
 
-    # Dev shortcut: if no secret key is set, skip verification entirely.
-    if not secret:
+    # Skip when no secret key is configured (local dev) or no token was sent
+    # (admin panel, legacy clients, browsers with Turnstile blocked).
+    if not secret or not token:
         return
 
     payload: dict = {"secret": secret, "response": token}
