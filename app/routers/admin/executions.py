@@ -15,7 +15,7 @@ from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.enums import ExecutionStatus, SignalDirection
 from app.models.execution import Execution
 from app.models.schemas.common import PaginatedResponse
-from app.models.schemas.execution import ExecutionResponse
+from app.models.schemas.execution import CloseExecutionResponse, ExecutionResponse
 
 router = APIRouter()
 
@@ -82,6 +82,46 @@ async def admin_get_execution(
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")
     return ExecutionResponse.model_validate(execution)
+
+
+@router.post("/executions/{execution_id}/close", response_model=CloseExecutionResponse)
+async def admin_close_execution(
+    execution_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    admin_perms: UserPermissions = RequireAdmin,
+):
+    """Admin: manually close any open position regardless of ownership."""
+    from app.routers.execution import close_execution as _user_close
+    from app.middleware.permissions import UserPermissions as _UP
+
+    # Verify the execution exists and load its owner
+    result = await db.execute(
+        select(Execution)
+        .options(selectinload(Execution.user))
+        .where(Execution.id == execution_id)
+    )
+    execution = result.scalar_one_or_none()
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    if execution.status != ExecutionStatus.FILLED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot close execution with status '{execution.status.value}'. Only FILLED positions can be closed.",
+        )
+
+    await log_audit(
+        db=db,
+        user_id=admin_perms.user.id,
+        action="ADMIN_MANUAL_CLOSE",
+        details={
+            "execution_id": str(execution_id),
+            "target_user_id": str(execution.user_id),
+        },
+    )
+
+    # Delegate to user close endpoint, impersonating the execution's owner
+    owner_perms = _UP(user=execution.user)
+    return await _user_close(execution_id=execution_id, perms=owner_perms, db=db)
 
 
 # ── Manual execution trigger ────────────────────────────────────────
