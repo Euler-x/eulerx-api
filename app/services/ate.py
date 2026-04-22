@@ -938,6 +938,10 @@ class ATEService:
         for entry in closed:
             await self._send_close_notification(entry, notification_service)
 
+        # Strip ORM objects before returning — Celery must JSON-serialize this
+        for entry in closed:
+            entry.pop("_user", None)
+
         return closed
 
     def _reconcile_closed_position(
@@ -1006,7 +1010,8 @@ class ATEService:
             "exit_price": exit_price,
             "pnl": float(execution.pnl),
             "tx_hash": close_hash,
-            "user": user,
+            "user_id": str(user.id),
+            "_user": user,
             "strategy_name": strategy_name,
             "direction": execution.direction.value,
             "exchange": getattr(execution, "exchange", Exchange.HYPERLIQUID).value,
@@ -1016,7 +1021,7 @@ class ATEService:
         self, entry: dict, notification_service: NotificationService
     ) -> None:
         """Send TP/SL notification for a closed position."""
-        user = entry.get("user")
+        user = entry.get("_user")
         if not user:
             return
         try:
