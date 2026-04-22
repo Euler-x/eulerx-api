@@ -98,6 +98,8 @@ class TradingAnalyticsResponse(BaseModel):
     avg_pnl: float
     best_trade: float
     worst_trade: float
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
     pnl_by_day: list[PnlByDay]
     executions_by_day: list[ExecutionsByDay]
     by_symbol: list[SymbolTradingStats]
@@ -658,6 +660,8 @@ async def admin_trading_analytics(
         avg_pnl=float(agg.avg_pnl),
         best_trade=float(agg.best_trade),
         worst_trade=float(agg.worst_trade),
+        gross_profit=round(_gp, 4),
+        gross_loss=round(_gl, 4),
         pnl_by_day=pnl_by_day,
         executions_by_day=executions_by_day,
         by_symbol=by_symbol,
