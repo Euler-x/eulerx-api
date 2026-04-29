@@ -1,5 +1,6 @@
 """Test ATE service — TP/SL position monitoring (Improvement #4)."""
 
+import time
 import uuid
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -105,7 +106,7 @@ async def test_monitor_positions_tp_hit(ate_fixtures, mock_hyperliquid_api):
             "px": "56000",
             "hash": "0x" + "c" * 64,
             "closedPnl": "600",
-            "time": 1000,
+            "time": int(time.time() * 1000),
         }
     ]
 
@@ -195,7 +196,7 @@ async def test_monitor_positions_sl_hit(setup_db, mock_hyperliquid_api):
             "px": "3300",
             "hash": "0x" + "c" * 64,
             "closedPnl": "-300",
-            "time": 1000,
+            "time": int(time.time() * 1000),
         }
     ]
 

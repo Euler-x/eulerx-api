@@ -1,5 +1,6 @@
 """Test Celery worker tasks — async inner functions and pipeline orchestration."""
 
+import time
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -484,7 +485,7 @@ async def test_monitor_open_positions_task(setup_db, mock_hyperliquid_api):
             "px": "3600",
             "hash": "0x" + "c" * 64,
             "closedPnl": "600",
-            "time": 1000,
+            "time": int(time.time() * 1000),
         }
     ]
 
