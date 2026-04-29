@@ -14,6 +14,7 @@ from app.models.enums import WalletType
 if TYPE_CHECKING:
     from app.models.ambassador import Ambassador
     from app.models.execution import Execution
+    from app.models.portfolio_snapshot import PortfolioSnapshot
     from app.models.strategy import Strategy
     from app.models.billing import Subscription
     from app.models.support import SupportTicket
@@ -104,6 +105,9 @@ class User(Base, TimestampMixin):
         back_populates="user", cascade="all, delete-orphan"
     )
     executions: Mapped[list["Execution"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    portfolio_snapshots: Mapped[list["PortfolioSnapshot"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     transactions: Mapped[list["Transaction"]] = relationship(

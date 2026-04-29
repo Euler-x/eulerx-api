@@ -67,6 +67,7 @@ celery_app.conf.update(
         "app.worker.tasks.check_expiring_subscriptions": {"queue": "maintenance"},
         "app.worker.tasks.monitor_open_positions": {"queue": "execution"},
         "app.worker.tasks.cleanup_old_data": {"queue": "maintenance"},
+        "app.worker.tasks.capture_portfolio_snapshots": {"queue": "maintenance"},
     },
     # Worker lifecycle
     worker_max_tasks_per_child=50,
@@ -109,6 +110,11 @@ celery_app.conf.update(
         "cleanup-old-data-weekly": {
             "task": "app.worker.tasks.cleanup_old_data",
             "schedule": crontab(minute="0", hour="3", day_of_week="0"),
+            "options": {"queue": "maintenance"},
+        },
+        "capture-portfolio-snapshots-every-4h": {
+            "task": "app.worker.tasks.capture_portfolio_snapshots",
+            "schedule": crontab(minute="0", hour="*/4"),
             "options": {"queue": "maintenance"},
         },
     },

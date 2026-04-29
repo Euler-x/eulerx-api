@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.middleware.permissions import RequireVerified, UserPermissions
 from app.models.schemas.analytics import (
     AnalyticsOverviewResponse,
     EquityCurvePoint,
+    PublicSystemPerformanceResponse,
     StrategyAnalyticsResponse,
 )
 from app.models.strategy import Strategy
@@ -71,3 +72,59 @@ async def get_equity_curve(
         db, perms.id, strategy_id=strategy_id, days=days, exchange=exchange
     )
     return [EquityCurvePoint(**point) for point in curve]
+
+
+# ── Public endpoint (no auth, rate-limited) ──────────────────────────
+
+# Simple in-memory rate limiter for the public endpoint
+_rate_limit_cache: dict[str, list[float]] = {}
+_RATE_LIMIT_MAX = 10  # max requests per window
+_RATE_LIMIT_WINDOW = 60  # seconds
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Return True if the request is within rate limits."""
+    import time
+
+    now = time.time()
+    hits = _rate_limit_cache.get(client_ip, [])
+    # Prune old entries
+    hits = [t for t in hits if now - t < _RATE_LIMIT_WINDOW]
+    if len(hits) >= _RATE_LIMIT_MAX:
+        _rate_limit_cache[client_ip] = hits
+        return False
+    hits.append(now)
+    _rate_limit_cache[client_ip] = hits
+    return True
+
+
+@router.get(
+    "/system-performance",
+    response_model=PublicSystemPerformanceResponse,
+    summary="Public system performance (last 30 days)",
+    description=(
+        "Aggregated trading performance across all users. "
+        "Public endpoint — no authentication required. "
+        "Rate limited to 10 requests per minute per IP."
+    ),
+)
+async def get_system_performance(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint for landing page performance statistics.
+
+    Returns aggregate system-wide performance over the last 30 days
+    including total trading volume, profit/loss %, and daily breakdown.
+    No user-level data is exposed.
+    """
+    from fastapi import HTTPException
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=429, detail="Rate limit exceeded. Please try again later."
+        )
+
+    data = await AnalyticsService.compute_system_performance(db, days=30)
+    return PublicSystemPerformanceResponse(**data)

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import get_settings
@@ -626,24 +627,76 @@ class BybitService:
         return await asyncio.to_thread(_fetch)
 
     async def get_closed_pnl(
-        self, api_key: str, api_secret: str, symbol: str
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        start_time_ms: int | None = None,
+        limit: int = 20,
     ) -> dict | None:
-        """Get the most recent closed PnL record for a symbol."""
+        """Get the best matching closed PnL record for a symbol."""
 
         def _fetch():
             session = self._get_session(api_key, api_secret)
-            resp = session.get_closed_pnl(category="linear", symbol=symbol, limit=1)
+            params: dict[str, Any] = {
+                "category": "linear",
+                "symbol": symbol,
+                "limit": limit,
+            }
+            if start_time_ms:
+                params["startTime"] = start_time_ms
+            resp = session.get_closed_pnl(**params)
             if resp["retCode"] != 0:
                 return None
             records = resp["result"]["list"]
             if not records:
                 return None
-            r = records[0]
+            best_record = None
+            best_score = None
+            for record in records:
+                updated_time_ms = int(
+                    record.get("updatedTime")
+                    or record.get("createdTime")
+                    or record.get("execTime")
+                    or 0
+                )
+                if (
+                    start_time_ms
+                    and updated_time_ms
+                    and updated_time_ms < start_time_ms
+                ):
+                    continue
+
+                score = updated_time_ms
+                if record.get("avgExitPrice"):
+                    score += 10_000_000_000_000
+                if record.get("closedPnl") is not None:
+                    score += 5_000_000_000_000
+
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_record = record
+
+            if best_record is None:
+                return None
+
+            closed_time_ms = int(
+                best_record.get("updatedTime")
+                or best_record.get("createdTime")
+                or best_record.get("execTime")
+                or 0
+            )
             return {
-                "pnl": float(r.get("closedPnl", 0)),
-                "exit_price": float(r.get("avgExitPrice", 0)),
-                "entry_price": float(r.get("avgEntryPrice", 0)),
-                "symbol": r.get("symbol", ""),
+                "pnl": float(best_record.get("closedPnl", 0)),
+                "exit_price": float(best_record.get("avgExitPrice", 0)),
+                "entry_price": float(best_record.get("avgEntryPrice", 0)),
+                "symbol": best_record.get("symbol", ""),
+                "close_hash": best_record.get("orderId"),
+                "closed_at": (
+                    datetime.fromtimestamp(closed_time_ms / 1000, tz=timezone.utc)
+                    if closed_time_ms
+                    else None
+                ),
             }
 
         return await asyncio.to_thread(_fetch)

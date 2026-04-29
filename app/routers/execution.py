@@ -17,6 +17,7 @@ from app.models.schemas.execution import (
     ExecutionVerifyResponse,
 )
 from app.services.bybit import BybitService
+from app.services.execution_sync import ExecutionSyncService
 from app.services.hyperliquid import HyperliquidService
 from app.services.notifications import NotificationService
 from app.services.verification import VerificationService
@@ -134,6 +135,9 @@ async def close_execution(
     1. Position is still open on the exchange → places a market close order then syncs.
     2. Position was already closed on the exchange but EulerX still shows it as open
        (e.g. user closed it on the exchange UI) → reconciles exit data and marks closed.
+
+    Uses ExecutionSyncService for consistent close data recording including
+    exit_price, PnL, closed_at, close_reason, and close_source.
     """
     result = await db.execute(
         select(Execution)
@@ -170,6 +174,7 @@ async def close_execution(
     is_buy: bool = execution.direction == SignalDirection.BUY
     exchange_name: Exchange = getattr(execution, "exchange", Exchange.HYPERLIQUID)
     already_closed_on_exchange = False
+    close_data: dict | None = None
 
     # ── HyperLiquid ──────────────────────────────────────────────────────────
     if exchange_name == Exchange.HYPERLIQUID:
@@ -210,42 +215,55 @@ async def close_execution(
                 execution_id,
             )
 
-        # Fetch fills to get exit price and PnL (works for both scenarios)
-        fills = await hl.get_user_fills(user.wallet_address)
-        close_side = "A" if is_buy else "B"
-        entry_time_ms = (
-            int(execution.executed_at.timestamp() * 1000)
-            if execution.executed_at
-            else 0
+        # Wait for fill settlement — polls for real close data
+        close_data = await ExecutionSyncService.wait_for_hyperliquid_close(
+            hl,
+            execution,
+            user.wallet_address,
+            attempts=8,
+            delay_seconds=1.5,
         )
-        exit_price: float | None = None
-        close_hash: str | None = None
-        closed_pnl: float = 0.0
 
-        for fill in reversed(fills):
-            if (
-                fill.get("coin") == symbol
-                and fill.get("side") == close_side
-                and fill.get("time", 0) > entry_time_ms
-            ):
-                exit_price = float(fill.get("px", 0))
-                close_hash = fill.get("hash")
-                closed_pnl = float(fill.get("closedPnl", 0))
-                break
-
-        if exit_price is None:
-            # Fallback: use current mark price from position data if available
-            exit_price = float(execution.entry_price)
-            logger.warning(
-                "No close fill found for execution %s — falling back to entry price",
-                execution_id,
+        # Fallback: if wait times out, try one more extended fills lookup
+        if close_data is None:
+            extended_fills = await hl.get_user_fills(user.wallet_address, limit=2000)
+            close_data = ExecutionSyncService.find_hyperliquid_close_fill(
+                execution, extended_fills
             )
 
-        message = (
-            f"Position synced — was already closed on HyperLiquid at ${exit_price:.4f}."
-            if already_closed_on_exchange
-            else f"Position closed on HyperLiquid at ${exit_price:.4f}."
-        )
+        # Last resort: use current mid price
+        if close_data is None:
+            logger.warning(
+                "No fill data found for manual close of execution %s — "
+                "using current mid price",
+                execution_id,
+            )
+            try:
+                all_mids = await hl.get_all_mids()
+                mid_price = float(all_mids.get(symbol, 0))
+            except Exception:
+                mid_price = 0.0
+
+            if mid_price > 0:
+                entry_price_f = float(execution.entry_price)
+                pnl = (
+                    (mid_price - entry_price_f) * quantity
+                    if is_buy
+                    else (entry_price_f - mid_price) * quantity
+                )
+                close_data = {
+                    "exit_price": mid_price,
+                    "pnl": pnl,
+                    "close_hash": None,
+                    "closed_at": None,
+                }
+            else:
+                close_data = {
+                    "exit_price": float(execution.entry_price),
+                    "pnl": 0.0,
+                    "close_hash": None,
+                    "closed_at": None,
+                }
 
     # ── Bybit ────────────────────────────────────────────────────────────────
     else:
@@ -281,41 +299,68 @@ async def close_execution(
                 "Execution %s already closed on Bybit — syncing record", execution_id
             )
 
-        # Get actual exit price and PnL from Bybit closed PnL API
-        exit_price = float(execution.entry_price)
-        closed_pnl = 0.0
-        close_hash = None
-        try:
-            closed_pnl_data = await bybit.get_closed_pnl(api_key, api_secret, symbol)
-            if closed_pnl_data:
-                exit_price = closed_pnl_data.get("exit_price", exit_price)
-                closed_pnl = closed_pnl_data.get("pnl", 0.0)
-        except Exception as e:
-            logger.warning(
-                "Failed to fetch Bybit closed PnL for execution %s: %s", execution_id, e
-            )
-
-        message = (
-            f"Position synced — was already closed on Bybit at ${exit_price:.4f}."
-            if already_closed_on_exchange
-            else f"Position closed on Bybit at ${exit_price:.4f}."
+        # Wait for fill settlement
+        close_data = await ExecutionSyncService.wait_for_bybit_close(
+            bybit,
+            execution,
+            api_key,
+            api_secret,
+            attempts=8,
+            delay_seconds=1.5,
         )
 
-    # ── Persist ──────────────────────────────────────────────────────────────
-    entry_price_f = float(execution.entry_price)
-    if closed_pnl:
-        execution.pnl = closed_pnl
-    elif is_buy:
-        execution.pnl = (exit_price - entry_price_f) * quantity
-    else:
-        execution.pnl = (entry_price_f - exit_price) * quantity
+        # Fallback: direct closed PnL lookup
+        if close_data is None:
+            try:
+                opened_at_ms = int(
+                    ExecutionSyncService.get_execution_opened_at(execution).timestamp()
+                    * 1000
+                )
+                pnl_data = await bybit.get_closed_pnl(
+                    api_key, api_secret, symbol, start_time_ms=opened_at_ms, limit=20
+                )
+                if pnl_data:
+                    close_data = pnl_data
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch Bybit closed PnL for execution %s: %s",
+                    execution_id,
+                    e,
+                )
 
-    execution.exit_price = exit_price
-    execution.status = ExecutionStatus.CLOSED
-    if close_hash:
-        execution.tx_hash = close_hash
+        # Last resort
+        if close_data is None:
+            close_data = {
+                "exit_price": float(execution.entry_price),
+                "pnl": 0.0,
+                "close_hash": None,
+                "closed_at": None,
+            }
+
+    # ── Persist via centralized sync service ─────────────────────────────────
+    exit_price = close_data.get("exit_price", float(execution.entry_price))
+    closed_pnl = close_data.get("pnl", close_data.get("closed_pnl", 0.0))
+    close_hash = close_data.get("close_hash")
+    closed_at = close_data.get("closed_at")
+
+    ExecutionSyncService.apply_close_details(
+        execution,
+        signal,
+        exit_price=exit_price,
+        closed_pnl=closed_pnl,
+        close_hash=close_hash,
+        closed_at=closed_at,
+        close_source="manual",
+        manual_close=True,
+    )
 
     await db.flush()
+
+    message = (
+        f"Position synced — was already closed on {exchange_name.value} at ${exit_price:.4f}."
+        if already_closed_on_exchange
+        else f"Position closed on {exchange_name.value} at ${exit_price:.4f}."
+    )
 
     # Send notification (non-blocking — failure must not affect the response)
     try:
@@ -328,7 +373,7 @@ async def close_execution(
             user=user,
             symbol=symbol,
             direction=direction_str,
-            entry_price=f"{entry_price_f:.4f}",
+            entry_price=f"{float(execution.entry_price):.4f}",
             exit_price=f"{exit_price:.4f}",
             pnl=pnl_str,
             strategy_name=f"{strategy_name} (Manual Close)",

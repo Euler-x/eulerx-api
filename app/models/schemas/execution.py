@@ -27,6 +27,9 @@ class ExecutionResponse(BaseModel):
     error_message: Optional[str] = None
     status: ExecutionStatus
     executed_at: Optional[datetime]
+    closed_at: Optional[datetime] = None
+    close_reason: Optional[str] = None
+    close_source: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -43,3 +46,4 @@ class CloseExecutionResponse(BaseModel):
     execution: ExecutionResponse
     message: str
     already_closed_on_exchange: bool
+    sync_pending: bool = False

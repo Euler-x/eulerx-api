@@ -19,6 +19,7 @@ from app.models.signal import Signal
 from app.models.strategy import Strategy
 from app.models.user import User
 from app.services.bybit import BybitService
+from app.services.execution_sync import ExecutionSyncService
 from app.services.hyperliquid import HyperliquidService
 from app.services.notifications import NotificationService
 from app.services.verification import VerificationService
@@ -812,55 +813,95 @@ class ATEService:
 
         for wallet_address, executions in by_wallet.items():
             hl_positions = await self.hyperliquid.get_user_positions(wallet_address)
-            fills = await self.hyperliquid.get_user_fills(wallet_address)
+            fills = await self.hyperliquid.get_user_fills(wallet_address, limit=500)
 
             for execution in executions:
-                signal = execution.signal
+                signal = execution.signal or execution.bybit_signal
                 user = execution.user
                 strategy = execution.strategy
                 if not signal or not user:
                     continue
 
                 symbol = signal.symbol
-                entry_price = float(execution.entry_price)
-                is_buy = execution.direction == SignalDirection.BUY
 
                 hl_pos = hl_positions.get(symbol)
                 if hl_pos is not None:
                     continue
 
-                exit_price = None
-                close_hash = None
-                closed_pnl = 0.0
-                close_side = "A" if is_buy else "B"
-                entry_time_ms = (
-                    int(execution.executed_at.timestamp() * 1000)
-                    if execution.executed_at
-                    else 0
+                # Position is GONE from Hyperliquid — find the close fill
+                close_data = ExecutionSyncService.find_hyperliquid_close_fill(
+                    execution,
+                    fills,
                 )
-                for fill in reversed(fills):
-                    if (
-                        fill.get("coin") == symbol
-                        and fill.get("side") == close_side
-                        and fill.get("time", 0) > entry_time_ms
-                    ):
-                        exit_price = float(fill.get("px", 0))
-                        close_hash = fill.get("hash")
-                        closed_pnl = float(fill.get("closedPnl", 0))
-                        break
 
-                if exit_price is None:
-                    continue
+                # Fallback: if standard fill matching fails, re-fetch fills
+                # with a larger window and try again
+                if close_data is None:
+                    logger.warning(
+                        "Position gone on HL for execution %s (%s) but no "
+                        "close fill in initial batch — fetching extended fills",
+                        execution.id,
+                        symbol,
+                    )
+                    extended_fills = await self.hyperliquid.get_user_fills(
+                        wallet_address, limit=2000
+                    )
+                    close_data = ExecutionSyncService.find_hyperliquid_close_fill(
+                        execution,
+                        extended_fills,
+                    )
+
+                # Last resort: position confirmed gone, fetch current mid
+                # price to calculate best-available close data.  The monitor
+                # runs every minute — this means the price is at most ~1 min
+                # stale and guarantees the execution won't stay FILLED.
+                if close_data is None:
+                    logger.warning(
+                        "No fill data found for execution %s (%s) after "
+                        "extended search — using current mid price as exit",
+                        execution.id,
+                        symbol,
+                    )
+                    try:
+                        all_mids = await self.hyperliquid.get_all_mids()
+                        mid_price = float(all_mids.get(symbol, 0))
+                    except Exception as e:
+                        logger.error(
+                            "Failed to fetch mid prices for fallback close: %s", e
+                        )
+                        mid_price = 0.0
+
+                    if mid_price > 0:
+                        entry_price = float(execution.entry_price)
+                        quantity = float(execution.quantity)
+                        is_buy = execution.direction == SignalDirection.BUY
+                        pnl = (
+                            (mid_price - entry_price) * quantity
+                            if is_buy
+                            else (entry_price - mid_price) * quantity
+                        )
+                        close_data = {
+                            "exit_price": mid_price,
+                            "closed_pnl": pnl,
+                            "close_hash": None,
+                            "closed_at": utc_now(),
+                        }
+                    else:
+                        # Cannot determine exit price — skip this cycle,
+                        # will retry on next monitor run
+                        continue
 
                 result_entry = self._reconcile_closed_position(
                     execution,
                     signal,
                     strategy,
                     user,
-                    exit_price,
-                    close_hash,
-                    closed_pnl,
+                    close_data["exit_price"],
+                    close_data.get("close_hash"),
+                    close_data.get("closed_pnl", 0.0),
+                    close_data.get("closed_at"),
                     notification_service,
+                    close_source="monitor",
                 )
                 if result_entry:
                     closed.append(result_entry)
@@ -898,15 +939,28 @@ class ATEService:
                     continue
 
                 # Position gone on Bybit — get actual PnL from closed PnL API
-                exit_price = entry_price
+                exit_price = float(execution.entry_price)
                 closed_pnl = 0.0
+                close_hash = None
+                closed_at = None
                 try:
                     closed_pnl_data = await user_bybit.get_closed_pnl(
-                        api_key, api_secret, symbol
+                        api_key,
+                        api_secret,
+                        symbol,
+                        start_time_ms=int(
+                            ExecutionSyncService.get_execution_opened_at(
+                                execution
+                            ).timestamp()
+                            * 1000
+                        ),
+                        limit=20,
                     )
                     if closed_pnl_data:
                         exit_price = closed_pnl_data.get("exit_price", entry_price)
                         closed_pnl = closed_pnl_data.get("pnl", 0.0)
+                        close_hash = closed_pnl_data.get("close_hash")
+                        closed_at = closed_pnl_data.get("closed_at")
                         logger.info(
                             "Bybit closed PnL for %s: exit=%.8f pnl=%.4f",
                             symbol,
@@ -924,9 +978,11 @@ class ATEService:
                     strategy,
                     user,
                     exit_price,
-                    None,
+                    close_hash,
                     closed_pnl,
+                    closed_at,
                     notification_service,
+                    close_source="monitor",
                 )
                 if result_entry:
                     closed.append(result_entry)
@@ -947,75 +1003,55 @@ class ATEService:
     def _reconcile_closed_position(
         self,
         execution: Execution,
-        signal: Signal,
+        signal: Signal | BybitSignal,
         strategy: Strategy | None,
         user: User,
         exit_price: float,
         close_hash: str | None,
         closed_pnl: float,
+        closed_at,
         notification_service: NotificationService,
+        close_source: str = "exchange_sync",
     ) -> dict | None:
         """Update execution with exit data and return result dict."""
-        entry_price = float(execution.entry_price)
-        quantity = float(execution.quantity)
-        is_buy = execution.direction == SignalDirection.BUY
-
-        if closed_pnl:
-            execution.pnl = closed_pnl
-        elif is_buy:
-            execution.pnl = (exit_price - entry_price) * quantity
-        else:
-            execution.pnl = (entry_price - exit_price) * quantity
-
-        execution.exit_price = exit_price
-        execution.status = ExecutionStatus.CLOSED
-        if close_hash:
-            execution.tx_hash = close_hash
-
-        tp_price = float(signal.take_profit) if signal.take_profit else None
-        sl_price = float(signal.stop_loss) if signal.stop_loss else None
-
-        if tp_price and (
-            (is_buy and exit_price >= tp_price * 0.99)
-            or (not is_buy and exit_price <= tp_price * 1.01)
-        ):
-            triggered = "take_profit"
-        elif sl_price and (
-            (is_buy and exit_price <= sl_price * 1.01)
-            or (not is_buy and exit_price >= sl_price * 0.99)
-        ):
-            triggered = "stop_loss"
-        else:
-            triggered = "closed"
+        result_entry = ExecutionSyncService.apply_close_details(
+            execution,
+            signal,
+            exit_price=exit_price,
+            closed_pnl=closed_pnl,
+            close_hash=close_hash,
+            closed_at=closed_at,
+            close_source=close_source,
+        )
 
         pnl_str = f"{float(execution.pnl):+.4f}"
         strategy_name = strategy.name if strategy else "Unknown"
 
         logger.info(
             "%s for %s: entry=%.4f exit=%.4f pnl=%s (user %s, %s)",
-            triggered.upper().replace("_", " "),
+            (execution.close_reason or "closed").upper().replace("_", " "),
             signal.symbol,
-            entry_price,
+            float(execution.entry_price),
             exit_price,
             pnl_str,
             user.id,
             getattr(execution, "exchange", "hyperliquid"),
         )
 
-        return {
-            "execution_id": str(execution.id),
-            "symbol": signal.symbol,
-            "triggered": triggered,
-            "entry_price": entry_price,
-            "exit_price": exit_price,
-            "pnl": float(execution.pnl),
-            "tx_hash": close_hash,
-            "user_id": str(user.id),
-            "_user": user,
-            "strategy_name": strategy_name,
-            "direction": execution.direction.value,
-            "exchange": getattr(execution, "exchange", Exchange.HYPERLIQUID).value,
-        }
+        result_entry.update(
+            {
+                "user_id": str(user.id),
+                "_user": user,
+                "strategy_name": strategy_name,
+                "triggered": execution.close_reason or "closed",
+                "exchange": getattr(
+                    execution,
+                    "exchange",
+                    Exchange.HYPERLIQUID,
+                ).value,
+            }
+        )
+        return result_entry
 
     async def _send_close_notification(
         self, entry: dict, notification_service: NotificationService

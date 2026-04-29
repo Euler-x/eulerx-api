@@ -12,6 +12,7 @@ from app.models.ambassador import Ambassador  # noqa: F401
 from app.models.billing import Payment, Plan, Subscription  # noqa: F401
 from app.models.content import LearningContent  # noqa: F401
 from app.models.execution import Execution  # noqa: F401
+from app.models.portfolio_snapshot import PortfolioSnapshot  # noqa: F401
 from app.models.signal import Signal  # noqa: F401
 from app.models.strategy import Strategy  # noqa: F401
 from app.models.support import SupportMessage, SupportTicket  # noqa: F401

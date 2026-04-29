@@ -891,3 +891,38 @@ def cleanup_old_data() -> dict:
     if run_async(_is_task_disabled("cleanup-old-data")):
         return {"status": "disabled"}
     return run_async(_cleanup_old_data_async())
+
+
+# ── Portfolio Snapshot Task ────────────────────────────────────────
+
+
+async def _capture_portfolio_snapshots_async() -> dict:
+    """Capture portfolio balance snapshots for all active users.
+
+    Provides the historical balance data needed for day/week/month
+    percentage return calculations on the dashboard and analytics pages.
+    """
+    from app.services.portfolio_snapshots import PortfolioSnapshotService
+
+    async with async_session_factory() as session:
+        try:
+            count = await PortfolioSnapshotService.capture_all_snapshots(session)
+            await session.commit()
+            logger.info("Captured portfolio snapshots for %d users", count)
+            return {"snapshots_captured": count}
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@shared_task(
+    name="app.worker.tasks.capture_portfolio_snapshots",
+    soft_time_limit=300,
+    time_limit=360,
+    acks_late=True,
+)
+def capture_portfolio_snapshots() -> dict:
+    """Every 4h: capture portfolio balance snapshots for return tracking."""
+    if run_async(_is_task_disabled("capture-portfolio-snapshots")):
+        return {"status": "disabled"}
+    return run_async(_capture_portfolio_snapshots_async())
