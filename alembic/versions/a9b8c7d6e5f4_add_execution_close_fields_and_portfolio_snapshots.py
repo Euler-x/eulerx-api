@@ -9,6 +9,8 @@ Create Date: 2026-04-29
 import sqlalchemy as sa
 from alembic import op
 
+from app.db.types import GUID
+
 revision = "a9b8c7d6e5f4"
 down_revision = "e5f6a7b8c9d0"
 branch_labels = None
@@ -33,8 +35,8 @@ def upgrade() -> None:
     # ── portfolio_snapshots table ────────────────────────────────────
     op.create_table(
         "portfolio_snapshots",
-        sa.Column("id", sa.UUID(), nullable=False),
-        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("id", GUID(length=36), nullable=False),
+        sa.Column("user_id", GUID(length=36), nullable=False),
         sa.Column(
             "account_equity",
             sa.Numeric(precision=18, scale=8),
