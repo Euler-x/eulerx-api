@@ -1,6 +1,6 @@
 """Add execution close tracking fields and portfolio_snapshots table
 
-Revision ID: f1a2b3c4d5e6
+Revision ID: a9b8c7d6e5f4
 Revises: e5f6a7b8c9d0
 Create Date: 2026-04-29
 
@@ -9,7 +9,7 @@ Create Date: 2026-04-29
 import sqlalchemy as sa
 from alembic import op
 
-revision = "f1a2b3c4d5e6"
+revision = "a9b8c7d6e5f4"
 down_revision = "e5f6a7b8c9d0"
 branch_labels = None
 depends_on = None
