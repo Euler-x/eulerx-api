@@ -528,10 +528,12 @@ def run_analysis_pipeline(self) -> dict:
             len(active_strategy_ids),
         )
 
-        # Stage 4: Execute each signal for each strategy
+        # Stage 4: Execute each signal for each strategy.
         # Strategies provide risk management (position sizing, drawdown, leverage).
-        # Once a signal is FILLED by one strategy, others will skip it
-        # (signal.status != NEW check in _execute_signal_for_strategy_async).
+        # ATEService.execute_signal enforces two idempotency layers:
+        #   1. Per-(signal_id, strategy_id): prevents re-execution by the same strategy.
+        #   2. Per-user per-symbol open position: prevents duplicate positions across
+        #      strategies or pipeline retries for the same user on the same symbol.
         total_executions = 0
 
         for strategy_id in active_strategy_ids:

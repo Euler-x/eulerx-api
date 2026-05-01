@@ -288,8 +288,42 @@ class ATEService:
             )
             return None
 
-        # ── Determine exchange for this signal ─────────────────────────
+        # Resolve exchange type once — used by all checks below.
         is_bybit = isinstance(signal, BybitSignal)
+
+        # Prevent duplicate open positions for the same user on the same symbol.
+        # Covers the case where multiple active strategies (or a pipeline retry)
+        # would otherwise each open a separate position on the same asset.
+        if is_bybit:
+            open_pos_query = (
+                select(func.count(Execution.id))
+                .join(BybitSignal, Execution.bybit_signal_id == BybitSignal.id)
+                .where(
+                    Execution.user_id == user.id,
+                    Execution.status == ExecutionStatus.FILLED,
+                    BybitSignal.symbol == signal.symbol,
+                )
+            )
+        else:
+            open_pos_query = (
+                select(func.count(Execution.id))
+                .join(Signal, Execution.signal_id == Signal.id)
+                .where(
+                    Execution.user_id == user.id,
+                    Execution.status == ExecutionStatus.FILLED,
+                    Signal.symbol == signal.symbol,
+                )
+            )
+        open_pos_result = await db.execute(open_pos_query)
+        if (open_pos_result.scalar() or 0) > 0:
+            logger.info(
+                "User %s already has an open position on %s — skipping duplicate",
+                user.id,
+                signal.symbol,
+            )
+            return None
+
+        # ── Determine exchange for this signal ─────────────────────────
         signal_exchange = Exchange.BYBIT if is_bybit else Exchange.HYPERLIQUID
 
         # ── Pre-execution wallet/key checks ───────────────────────────
@@ -390,20 +424,50 @@ class ATEService:
             await db.flush()
             return execution
 
-        # Final notional check
+        # Margin check — for levered positions the margin required is notional/leverage,
+        # not the full notional. Comparing raw notional to available_balance would
+        # incorrectly reject valid high-leverage trades.
         notional = quantity * entry_price
-        if notional > available_balance:
+        _pre_leverage = int(strategy.leverage_limit or settings.ate_default_leverage)
+        margin_required = notional / _pre_leverage if _pre_leverage > 0 else notional
+        if margin_required > available_balance:
             logger.warning(
-                "Notional $%.2f exceeds available balance $%.2f for signal %s",
-                notional,
+                "Margin required $%.2f exceeds available balance $%.2f for signal %s "
+                "(notional=$%.2f, leverage=%dx)",
+                margin_required,
                 available_balance,
                 signal.id,
+                notional,
+                _pre_leverage,
             )
             execution = self._create_failed_execution(
                 signal,
                 user,
                 strategy,
-                f"Order size (${notional:.2f}) exceeds available balance (${available_balance:.2f})",
+                f"Margin required (${margin_required:.2f}) exceeds available balance (${available_balance:.2f})",
+                entry_price,
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
+
+        # Safety gate: both TP and SL must be non-zero before any order is placed.
+        # A position without risk management controls is never acceptable.
+        _pre_tp = float(signal.take_profit) if signal.take_profit else None
+        _pre_sl = float(signal.stop_loss) if signal.stop_loss else None
+        if _pre_tp is None or _pre_sl is None:
+            logger.error(
+                "SAFETY BLOCK: Signal %s missing TP/SL (tp=%s, sl=%s) "
+                "— rejecting execution to protect capital",
+                signal.id,
+                _pre_tp,
+                _pre_sl,
+            )
+            execution = self._create_failed_execution(
+                signal,
+                user,
+                strategy,
+                "Rejected: missing take_profit or stop_loss — risk management required",
                 entry_price,
             )
             db.add(execution)
@@ -486,10 +550,10 @@ class ATEService:
                 strategy.id,
             )
 
-            # Place market order WITHOUT inline TP/SL.
-            # TP/SL will be set separately after fill via set_trading_stop,
-            # which validates against the actual fill price and avoids
-            # rejections when the market has moved past the signal's targets.
+            # Place market order with inline TP/SL for immediate protection.
+            # set_trading_stop is also called post-fill as a confirmation layer
+            # to ensure TP/SL is active even if the inline params were silently
+            # ignored (e.g. price already past target at fill time).
             order_result = await user_bybit.place_order(
                 api_key=api_key,
                 api_secret=api_secret,
@@ -497,6 +561,8 @@ class ATEService:
                 is_buy=is_buy,
                 size=quantity,
                 order_type="market",
+                take_profit=float(signal.take_profit) if signal.take_profit else None,
+                stop_loss=float(signal.stop_loss) if signal.stop_loss else None,
             )
 
             if order_result.get("success"):
@@ -602,9 +668,11 @@ class ATEService:
             sl_price = float(signal.stop_loss) if signal.stop_loss else None
 
             if is_bybit:
-                # Bybit: use set_trading_stop (tick-size rounding handled
-                # inside place_tp_sl_orders)
-                if tp_price is not None or sl_price is not None:
+                # Confirm TP/SL via set_trading_stop — this is a backup to the
+                # inline TP/SL set at order placement. Both must be present (the
+                # safety gate above guarantees this). If confirmation fails,
+                # close the position immediately rather than leave it unprotected.
+                if tp_price is not None and sl_price is not None:
                     try:
                         bybit_keys = self._get_bybit_keys(user)
                         if bybit_keys:
@@ -620,22 +688,82 @@ class ATEService:
                             )
                             if tpsl_result.get("success"):
                                 logger.info(
-                                    "Bybit TP/SL set for %s: tp=$%s sl=$%s",
+                                    "Bybit TP/SL confirmed for %s: tp=$%s sl=$%s",
                                     signal.symbol,
                                     tp_price,
                                     sl_price,
                                 )
                             else:
-                                logger.warning(
+                                logger.error(
                                     "Bybit set_trading_stop failed for %s: %s "
-                                    "— position is open without TP/SL, "
-                                    "monitor will handle exits",
+                                    "— inline TP/SL at order placement may still be active; "
+                                    "closing position as safety measure",
                                     signal.symbol,
                                     tpsl_result.get("error"),
                                 )
+                                try:
+                                    close_result = await user_bybit.close_position(
+                                        api_key=api_key,
+                                        api_secret=api_secret,
+                                        symbol=signal.symbol,
+                                        size=quantity,
+                                        is_buy=is_buy,
+                                    )
+                                    if close_result.get("success"):
+                                        execution.status = ExecutionStatus.FAILED
+                                        execution.error_message = (
+                                            f"Position closed: TP/SL confirmation failed "
+                                            f"({tpsl_result.get('error', 'unknown')})"
+                                        )
+                                        logger.warning(
+                                            "Emergency close successful for %s — "
+                                            "execution marked FAILED",
+                                            signal.symbol,
+                                        )
+                                    else:
+                                        logger.error(
+                                            "Emergency close FAILED for %s: %s — "
+                                            "MANUAL INTERVENTION REQUIRED",
+                                            signal.symbol,
+                                            close_result.get("error"),
+                                        )
+                                except Exception as close_err:
+                                    logger.error(
+                                        "Exception during emergency close for %s: %s — "
+                                        "MANUAL INTERVENTION REQUIRED",
+                                        signal.symbol,
+                                        close_err,
+                                    )
                     except Exception as e:
                         logger.error(
-                            "Exception setting Bybit TP/SL for %s: %s",
+                            "Exception confirming Bybit TP/SL for %s: %s",
+                            signal.symbol,
+                            e,
+                        )
+                else:
+                    # Should never reach here — safety gate above blocks orders without TP/SL.
+                    # If somehow reached, close the position immediately.
+                    logger.error(
+                        "CRITICAL: Bybit position for %s is open with no TP/SL — "
+                        "closing immediately to prevent unmanaged loss",
+                        signal.symbol,
+                    )
+                    try:
+                        _keys_e = self._get_bybit_keys(user)
+                        if _keys_e:
+                            _ak_e, _as_e = _keys_e
+                            _bybit_e = self._get_user_bybit_service(user)
+                            await _bybit_e.close_position(
+                                api_key=_ak_e,
+                                api_secret=_as_e,
+                                symbol=signal.symbol,
+                                size=quantity,
+                                is_buy=is_buy,
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "Emergency close failed for %s: %s — "
+                            "MANUAL INTERVENTION REQUIRED",
                             signal.symbol,
                             e,
                         )
@@ -938,8 +1066,8 @@ class ATEService:
                 if bb_pos is not None:
                     continue
 
-                # Position gone on Bybit — get actual PnL from closed PnL API
-                exit_price = float(execution.entry_price)
+                # Position gone on Bybit — get actual exit data from closed PnL API
+                exit_price = 0.0
                 closed_pnl = 0.0
                 close_hash = None
                 closed_at = None
@@ -957,20 +1085,68 @@ class ATEService:
                         limit=20,
                     )
                     if closed_pnl_data:
-                        exit_price = closed_pnl_data.get("exit_price", entry_price)
-                        closed_pnl = closed_pnl_data.get("pnl", 0.0)
-                        close_hash = closed_pnl_data.get("close_hash")
-                        closed_at = closed_pnl_data.get("closed_at")
-                        logger.info(
-                            "Bybit closed PnL for %s: exit=%.8f pnl=%.4f",
-                            symbol,
-                            exit_price,
-                            closed_pnl,
-                        )
+                        # Use 'or 0.0' then check > 0 — Bybit can return avgExitPrice=""
+                        # or "0" when data is incomplete; don't use those as exit prices.
+                        raw_exit = closed_pnl_data.get("exit_price") or 0.0
+                        if raw_exit > 0:
+                            exit_price = raw_exit
+                            closed_pnl = closed_pnl_data.get("pnl", 0.0)
+                            close_hash = closed_pnl_data.get("close_hash")
+                            closed_at = closed_pnl_data.get("closed_at")
+                            logger.info(
+                                "Bybit closed PnL for %s: exit=%.8f pnl=%.4f",
+                                symbol,
+                                exit_price,
+                                closed_pnl,
+                            )
                 except Exception as e:
                     logger.warning(
                         "Failed to get Bybit closed PnL for %s: %s", symbol, e
                     )
+
+                # Fallback: no valid exit price from closed PnL API — fetch current
+                # ticker price (mirrors the Hyperliquid mid-price fallback).
+                if exit_price <= 0:
+                    logger.warning(
+                        "No Bybit closed PnL data for %s (execution %s) — "
+                        "falling back to current ticker price",
+                        symbol,
+                        execution.id,
+                    )
+                    try:
+                        ticker = await user_bybit.get_ticker(symbol)
+                        if ticker:
+                            bid = float(ticker.get("bid1Price") or 0)
+                            ask = float(ticker.get("ask1Price") or 0)
+                            mid = (
+                                (bid + ask) / 2
+                                if bid > 0 and ask > 0
+                                else float(ticker.get("lastPrice") or 0)
+                            )
+                            if mid > 0:
+                                exit_price = mid
+                                q = float(execution.quantity)
+                                closed_pnl = (
+                                    (mid - entry_price) * q
+                                    if is_buy
+                                    else (entry_price - mid) * q
+                                )
+                    except Exception as e:
+                        logger.error(
+                            "Failed to fetch Bybit ticker fallback for %s: %s",
+                            symbol,
+                            e,
+                        )
+
+                # Still no exit price — skip this cycle, retry on next monitor run
+                if exit_price <= 0:
+                    logger.warning(
+                        "Cannot determine exit price for %s execution %s — "
+                        "skipping, will retry on next monitor cycle",
+                        symbol,
+                        execution.id,
+                    )
+                    continue
 
                 result_entry = self._reconcile_closed_position(
                     execution,

@@ -541,29 +541,42 @@ class AIEngineService:
                 hold_count += 1
                 continue
 
-            # Reject signals with stop loss too tight (< 0.5%) or too wide (> 3%)
+            # Require non-zero entry, stop_loss, and take_profit — reject naked signals
             entry = aggregated["entry_price"]
             sl = aggregated["stop_loss"]
-            if entry > 0 and sl > 0:
-                sl_distance_pct = abs(entry - sl) / entry * 100
-                if sl_distance_pct < 0.5:
-                    logger.info(
-                        "Skipping %s: SL too tight (%.2f%% from entry), "
-                        "minimum 0.5%% required",
-                        symbol,
-                        sl_distance_pct,
-                    )
-                    hold_count += 1
-                    continue
-                if sl_distance_pct > 3.0:
-                    logger.info(
-                        "Skipping %s: SL too wide (%.2f%% from entry), "
-                        "maximum 3%% — entry not precise enough",
-                        symbol,
-                        sl_distance_pct,
-                    )
-                    hold_count += 1
-                    continue
+            tp = aggregated["take_profit"]
+            if not (entry > 0 and sl > 0 and tp > 0):
+                logger.info(
+                    "Skipping %s: zero or missing entry/SL/TP "
+                    "(entry=%.8f, sl=%.8f, tp=%.8f) — risk management required",
+                    symbol,
+                    entry,
+                    sl,
+                    tp,
+                )
+                hold_count += 1
+                continue
+
+            # Reject signals with stop loss too tight (< 0.5%) or too wide (> 3%)
+            sl_distance_pct = abs(entry - sl) / entry * 100
+            if sl_distance_pct < 0.5:
+                logger.info(
+                    "Skipping %s: SL too tight (%.2f%% from entry), "
+                    "minimum 0.5%% required",
+                    symbol,
+                    sl_distance_pct,
+                )
+                hold_count += 1
+                continue
+            if sl_distance_pct > 3.0:
+                logger.info(
+                    "Skipping %s: SL too wide (%.2f%% from entry), "
+                    "maximum 3%% — entry not precise enough",
+                    symbol,
+                    sl_distance_pct,
+                )
+                hold_count += 1
+                continue
 
             if direction == SignalDirection.BUY:
                 buy_count += 1
