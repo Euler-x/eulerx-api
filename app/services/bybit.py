@@ -916,3 +916,21 @@ class BybitService:
             return float(lot_filter.get("qtyStep", "0.001"))
         except Exception:
             return 0.001
+
+    async def get_lot_size_info(self, symbol: str) -> dict:
+        """Return qty_step, min_order_qty, and max_order_qty in one API call."""
+        try:
+            info = await self.get_instrument_info(symbol)
+            lot_filter = info.get("lotSizeFilter", {})
+            return {
+                "qty_step": float(lot_filter.get("qtyStep", "0.001")),
+                "min_order_qty": float(lot_filter.get("minOrderQty", "0.001")),
+                "max_order_qty": float(lot_filter.get("maxOrderQty", "0"))
+                or float("inf"),
+            }
+        except Exception:
+            return {
+                "qty_step": 0.001,
+                "min_order_qty": 0.001,
+                "max_order_qty": float("inf"),
+            }

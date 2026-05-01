@@ -399,7 +399,9 @@ class ATEService:
         entry_price = float(signal.entry_price)
         if is_bybit:
             user_bybit = self._get_user_bybit_service(user)
-            qty_step = await user_bybit.get_qty_step(signal.symbol)
+            lot_info = await user_bybit.get_lot_size_info(signal.symbol)
+            qty_step = lot_info["qty_step"]
+            max_order_qty = lot_info["max_order_qty"]
             # Derive decimals from qty_step (e.g. 0.001 → 3)
             import math as _math
 
@@ -407,10 +409,21 @@ class ATEService:
                 max(0, -int(_math.floor(_math.log10(qty_step)))) if qty_step > 0 else 3
             )
         else:
+            max_order_qty = float("inf")
             sz_decimals = await self._get_sz_decimals(signal.symbol)
         quantity = self.calculate_position_size(
             strategy, entry_price, available_balance, sz_decimals
         )
+
+        # Cap at exchange's max order quantity for this symbol.
+        if quantity > max_order_qty and max_order_qty < float("inf"):
+            logger.info(
+                "Calculated qty %s exceeds Bybit max_order_qty %s for %s — capping",
+                quantity,
+                max_order_qty,
+                signal.symbol if hasattr(signal, "symbol") else "unknown",
+            )
+            quantity = round(max_order_qty, sz_decimals)
         if quantity <= 0:
             logger.warning("Calculated position size is 0 for signal %s", signal.id)
             execution = self._create_failed_execution(
@@ -535,6 +548,9 @@ class ATEService:
             if actual_leverage != target_leverage and actual_leverage > 0:
                 ratio = actual_leverage / target_leverage
                 quantity = round(quantity * ratio, sz_decimals)
+                # Re-apply max_order_qty cap after leverage rescaling
+                if quantity > max_order_qty and max_order_qty < float("inf"):
+                    quantity = round(max_order_qty, sz_decimals)
                 notional = quantity * entry_price
 
             logger.info(
