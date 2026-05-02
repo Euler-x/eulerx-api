@@ -15,7 +15,8 @@ class AmbassadorAdmin(ModelView, model=Ambassador):
         Ambassador.user_id,
         Ambassador.rank,
         Ambassador.referral_code,
-        Ambassador.team_size,
+        Ambassador.par_count,
+        Ambassador.tav_count,
         Ambassador.total_referrals,
         Ambassador.rewards_earned,
         Ambassador.created_at,
@@ -32,7 +33,8 @@ class AmbassadorAdmin(ModelView, model=Ambassador):
     column_searchable_list = [Ambassador.referral_code]
     column_sortable_list = [
         Ambassador.rank,
-        Ambassador.team_size,
+        Ambassador.par_count,
+        Ambassador.tav_count,
         Ambassador.total_referrals,
         Ambassador.rewards_earned,
         Ambassador.created_at,

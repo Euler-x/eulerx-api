@@ -1,4 +1,4 @@
-"""User-facing ambassador program endpoints."""
+"""User-facing ambassador programme V2 endpoints."""
 
 import uuid
 from datetime import datetime, timezone
@@ -16,6 +16,7 @@ from app.models.ambassador_programs import (
     AmbassadorCommission,
     AmbassadorPayout,
     AmbassadorTrainingCompletion,
+    AmbassadorTravelIncentive,
 )
 from app.models.billing import Plan, Subscription
 from app.models.enums import AmbassadorRank, CommissionStatus, SubscriptionStatus
@@ -26,88 +27,91 @@ from app.models.schemas.ambassador import (
     EarningsSummary,
     LeaderboardEntry,
     PayoutResponse,
+    RankProgress,
     ReferralItem,
     ReferralResponse,
-    TerritoryResponse,
-    TierProgress,
     TrainingModuleSchema,
     TrainingResponse,
+    TravelIncentiveResponse,
 )
 from app.models.schemas.common import PaginatedResponse
 from app.models.user import User
 from app.config import get_settings
 from app.utils.helpers import generate_referral_code
 from app.services.ambassador import (
-    TIER_REQUIREMENTS,
-    get_active_referrals,
-    get_retention_rate,
+    RANK_CRITERIA,
+    RANK_MAX_DEPTH,
+    RANK_ORDER,
+    get_par_count,
+    get_tav_count,
+    count_qualifying_legs,
 )
 
 settings = get_settings()
 
 router = APIRouter(prefix="/ambassador", tags=["Ambassador"])
 
-# Training modules definition
+# Training modules (updated rank labels to match V2)
 TRAINING_MODULES = [
     {
-        "key": "non_custodial_basics",
-        "name": "Non-Custodial Architecture Basics",
-        "tier": AmbassadorRank.SCOUT,
+        "key": "platform_overview",
+        "name": "EulerX Platform Overview",
+        "rank": AmbassadorRank.ASSOCIATE,
         "duration_min": 15,
     },
     {
         "key": "product_walkthrough",
-        "name": "Product Walkthrough",
-        "tier": AmbassadorRank.SCOUT,
+        "name": "ATE Pro Product Walkthrough",
+        "rank": AmbassadorRank.ASSOCIATE,
         "duration_min": 30,
     },
     {
-        "key": "advanced_features",
-        "name": "Advanced Features Deep Dive",
-        "tier": AmbassadorRank.GUIDE,
-        "duration_min": 60,
+        "key": "referral_best_practices",
+        "name": "Referral Best Practices",
+        "rank": AmbassadorRank.BRONZE_LEADER,
+        "duration_min": 30,
     },
     {
         "key": "community_management",
-        "name": "Community Management Best Practices",
-        "tier": AmbassadorRank.GUIDE,
+        "name": "Community Management & Retention",
+        "rank": AmbassadorRank.BRONZE_LEADER,
         "duration_min": 45,
+    },
+    {
+        "key": "advanced_features",
+        "name": "Advanced ATE Pro Features Deep Dive",
+        "rank": AmbassadorRank.SILVER_LEADER,
+        "duration_min": 60,
     },
     {
         "key": "marketing_strategy",
-        "name": "Marketing Strategy Session",
-        "tier": AmbassadorRank.GUIDE,
+        "name": "Marketing Strategy & Conversion",
+        "rank": AmbassadorRank.GOLD_LEADER,
         "duration_min": 30,
-    },
-    {
-        "key": "technical_architecture",
-        "name": "Technical Architecture",
-        "tier": AmbassadorRank.STRATEGIST,
-        "duration_min": 45,
     },
     {
         "key": "risk_management",
         "name": "Risk Management Framework",
-        "tier": AmbassadorRank.STRATEGIST,
+        "rank": AmbassadorRank.PLATINUM_LEADER,
         "duration_min": 30,
     },
     {
-        "key": "institutional_sales",
-        "name": "Institutional Sales Approach",
-        "tier": AmbassadorRank.STRATEGIST,
+        "key": "team_leadership",
+        "name": "Team Leadership & Sub-Ambassador Development",
+        "rank": AmbassadorRank.DIAMOND_LEADER,
         "duration_min": 60,
     },
     {
-        "key": "territory_strategy",
-        "name": "Territory Strategy Development",
-        "tier": AmbassadorRank.MASTER,
-        "duration_min": 120,
+        "key": "institutional_approach",
+        "name": "Institutional & High-Net-Worth Approach",
+        "rank": AmbassadorRank.ELITE_DIAMOND,
+        "duration_min": 60,
     },
     {
-        "key": "sub_ambassador_management",
-        "name": "Sub-Ambassador Management",
-        "tier": AmbassadorRank.MASTER,
-        "duration_min": 90,
+        "key": "network_strategy",
+        "name": "Network Strategy & Organisation Building",
+        "rank": AmbassadorRank.BLACK_DIAMOND,
+        "duration_min": 120,
     },
 ]
 
@@ -117,7 +121,11 @@ async def _get_or_none(user_id: uuid.UUID, db: AsyncSession) -> Optional[Ambassa
     return result.scalar_one_or_none()
 
 
-# ── Existing endpoints ────────────────────────────────────────────────────────
+def _rank_label(rank: AmbassadorRank) -> str:
+    return rank.value.replace("_", " ").title()
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
 
 
 @router.get("", response_model=AmbassadorResponse | None)
@@ -131,6 +139,9 @@ async def get_ambassador_dashboard(
     return AmbassadorResponse.model_validate(ambassador)
 
 
+# ── Leaderboard ───────────────────────────────────────────────────────────────
+
+
 @router.get("/leaderboard", response_model=list[LeaderboardEntry])
 async def get_leaderboard(
     limit: int = Query(20, ge=1, le=100),
@@ -138,7 +149,7 @@ async def get_leaderboard(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Ambassador).order_by(Ambassador.total_referrals.desc()).limit(limit)
+        select(Ambassador).order_by(Ambassador.rewards_earned.desc()).limit(limit)
     )
     ambassadors = result.scalars().all()
 
@@ -148,10 +159,14 @@ async def get_leaderboard(
             user_id=amb.user_id,
             ambassador_rank=amb.rank,
             total_referrals=amb.total_referrals,
+            tav_count=amb.tav_count,
             rewards_earned=float(amb.rewards_earned),
         )
         for idx, amb in enumerate(ambassadors)
     ]
+
+
+# ── Referral link ─────────────────────────────────────────────────────────────
 
 
 @router.post("/referral", response_model=ReferralResponse)
@@ -176,6 +191,9 @@ async def generate_referral(
     )
 
 
+# ── Team (direct referrals, L1) ───────────────────────────────────────────────
+
+
 @router.get("/team", response_model=list[AmbassadorResponse])
 async def get_team(
     perms: UserPermissions = RequireVerified,
@@ -188,11 +206,10 @@ async def get_team(
     team_result = await db.execute(
         select(Ambassador).where(Ambassador.referred_by == ambassador.id)
     )
-    team = team_result.scalars().all()
-    return [AmbassadorResponse.model_validate(t) for t in team]
+    return [AmbassadorResponse.model_validate(t) for t in team_result.scalars().all()]
 
 
-# ── New endpoints ─────────────────────────────────────────────────────────────
+# ── Payout address ────────────────────────────────────────────────────────────
 
 
 @router.patch("/payout-address")
@@ -216,6 +233,9 @@ async def update_payout_address(
     return {"payout_address": payout_address}
 
 
+# ── Referrals list ────────────────────────────────────────────────────────────
+
+
 @router.get("/referrals", response_model=list[ReferralItem])
 async def get_referrals(
     perms: UserPermissions = RequireVerified,
@@ -231,14 +251,14 @@ async def get_referrals(
     referrals = referrals_result.scalars().all()
 
     items = []
+    now = datetime.now(timezone.utc)
+
     for ref in referrals:
-        # Get the user
         user_result = await db.execute(select(User).where(User.id == ref.user_id))
         user = user_result.scalar_one_or_none()
         if user is None:
             continue
 
-        # Get active subscription + plan
         sub_result = await db.execute(
             select(Subscription, Plan)
             .join(Plan, Plan.id == Subscription.plan_id)
@@ -248,12 +268,20 @@ async def get_referrals(
                     [SubscriptionStatus.ACTIVE, SubscriptionStatus.EXPIRING_SOON]
                 ),
             )
-            .order_by(Subscription.created_at.desc())
+            .order_by(Subscription.created_at.asc())
             .limit(1)
         )
         row = sub_result.first()
         plan_name = row[1].name if row else None
         plan_price = float(row[1].price_usd) if row else None
+
+        # Calculate subscription months for loyalty tracking
+        sub_months = 0
+        if row:
+            start = row[0].created_at
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            sub_months = max(0, int((now - start).days / 30))
 
         items.append(
             ReferralItem(
@@ -262,9 +290,13 @@ async def get_referrals(
                 plan_price=plan_price,
                 is_subscribed=user.is_subscribed,
                 rank=ref.rank,
+                subscription_months=sub_months,
             )
         )
     return items
+
+
+# ── Earnings summary ──────────────────────────────────────────────────────────
 
 
 @router.get("/earnings-summary", response_model=EarningsSummary)
@@ -272,28 +304,36 @@ async def get_earnings_summary(
     perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
+    now = datetime.now(timezone.utc)
+    next_month = now.month % 12 + 1
+    next_year = now.year + (1 if now.month == 12 else 0)
+    next_payout_date = f"{next_year}-{next_month:02d}-15"
+
     ambassador = await _get_or_none(perms.id, db)
     if ambassador is None:
-        empty_progress = TierProgress(
-            current_rank=AmbassadorRank.SCOUT,
-            next_rank=AmbassadorRank.GUIDE,
-            active_referrals=0,
-            required_active_referrals=10,
-        )
-        now = datetime.now(timezone.utc)
-        next_month = now.month % 12 + 1
-        next_year = now.year + (1 if now.month == 12 else 0)
         return EarningsSummary(
             total_commission_paid=0,
             total_commission_pending=0,
             current_month_commission=0,
-            next_payout_date=f"{next_year}-{next_month:02d}-15",
+            next_payout_date=next_payout_date,
             active_referral_count=0,
-            retention_rate=0.0,
-            tier_progress=empty_progress,
+            tav_count=0,
+            rank_progress=RankProgress(
+                current_rank=AmbassadorRank.ASSOCIATE,
+                next_rank=AmbassadorRank.BRONZE_LEADER,
+                current_rank_label=_rank_label(AmbassadorRank.ASSOCIATE),
+                next_rank_label=_rank_label(AmbassadorRank.BRONZE_LEADER),
+                par_count=0,
+                tav_count=0,
+                par_required=3,
+                tav_required=3,
+                legs_required=0,
+                current_depth=1,
+                next_depth=2,
+            ),
         )
 
-    # Commission totals
+    # Commission + bonus totals
     comm_result = await db.execute(
         select(AmbassadorCommission).where(
             AmbassadorCommission.ambassador_id == ambassador.id
@@ -319,7 +359,6 @@ async def get_earnings_summary(
     ) + sum(float(b.amount) for b in bonuses if b.status == CommissionStatus.PENDING)
 
     # Current month commission
-    now = datetime.now(timezone.utc)
     current_comm_result = await db.execute(
         select(AmbassadorCommission).where(
             AmbassadorCommission.ambassador_id == ambassador.id,
@@ -332,49 +371,62 @@ async def get_earnings_summary(
         float(current_comm.commission_amount) if current_comm else 0.0
     )
 
-    # Next payout date: 15th of next month
-    next_month = now.month % 12 + 1
-    next_year = now.year + (1 if now.month == 12 else 0)
-    next_payout_date = f"{next_year}-{next_month:02d}-15"
+    # Live PAR / TAV
+    par = await get_par_count(ambassador.id, db)
+    tav = await get_tav_count(ambassador.id, db)
 
-    # Active referrals
-    active_refs = await get_active_referrals(ambassador.id, db)
-    retention_rate = await get_retention_rate(ambassador.id, db)
-
-    # Tier progress
-    rank_order = [
-        AmbassadorRank.SCOUT,
-        AmbassadorRank.GUIDE,
-        AmbassadorRank.STRATEGIST,
-        AmbassadorRank.MASTER,
-    ]
-    current_idx = rank_order.index(ambassador.rank)
+    # Rank progress
+    current_idx = RANK_ORDER.index(ambassador.rank)
     next_rank = (
-        rank_order[current_idx + 1] if current_idx < len(rank_order) - 1 else None
+        RANK_ORDER[current_idx + 1] if current_idx < len(RANK_ORDER) - 1 else None
     )
-    next_reqs = TIER_REQUIREMENTS.get(next_rank) if next_rank else None
+    next_criteria = RANK_CRITERIA.get(next_rank) if next_rank else None
 
-    tier_progress = TierProgress(
+    qualifying_legs = 0
+    if next_criteria and next_criteria["legs"] > 0 and next_criteria["leg_rank"]:
+        qualifying_legs = await count_qualifying_legs(
+            ambassador.id, next_criteria["leg_rank"], db
+        )
+
+    rank_progress = RankProgress(
         current_rank=ambassador.rank,
         next_rank=next_rank,
-        active_referrals=len(active_refs),
-        required_active_referrals=next_reqs.get("min_active_referrals")
-        if next_reqs
-        else None,
-        required_retention_pct=next_reqs.get("min_retention_pct")
-        if next_reqs
-        else None,
+        current_rank_label=_rank_label(ambassador.rank),
+        next_rank_label=_rank_label(next_rank) if next_rank else None,
+        par_count=par,
+        tav_count=tav,
+        par_required=next_criteria["par"] if next_criteria else None,
+        tav_required=next_criteria["tav"] if next_criteria else None,
+        legs_required=next_criteria["legs"] if next_criteria else None,
+        leg_rank_required=(
+            _rank_label(next_criteria["leg_rank"])
+            if next_criteria and next_criteria["leg_rank"]
+            else None
+        ),
+        qualifying_legs=qualifying_legs,
+        current_depth=RANK_MAX_DEPTH.get(ambassador.rank, 1),
+        next_depth=RANK_MAX_DEPTH.get(next_rank) if next_rank else None,
     )
+
+    # Fast start eligibility
+    from app.services.ambassador import FAST_START_PERIODS
+
+    fast_start_eligible = ambassador.fast_start_claimed < FAST_START_PERIODS
 
     return EarningsSummary(
         total_commission_paid=total_paid,
         total_commission_pending=total_pending,
         current_month_commission=current_month_commission,
         next_payout_date=next_payout_date,
-        active_referral_count=len(active_refs),
-        retention_rate=retention_rate,
-        tier_progress=tier_progress,
+        active_referral_count=par,
+        tav_count=tav,
+        rank_progress=rank_progress,
+        fast_start_eligible=fast_start_eligible,
+        fast_start_period=ambassador.fast_start_claimed + 1,
     )
+
+
+# ── Commissions ───────────────────────────────────────────────────────────────
 
 
 @router.get("/commissions", response_model=PaginatedResponse)
@@ -405,15 +457,16 @@ async def get_commissions(
         .offset(offset)
         .limit(page_size)
     )
-    records = result.scalars().all()
-
     return PaginatedResponse(
-        items=[CommissionResponse.model_validate(r) for r in records],
+        items=[CommissionResponse.model_validate(r) for r in result.scalars().all()],
         total=total,
         page=page,
         page_size=page_size,
         total_pages=(total + page_size - 1) // page_size if page_size > 0 else 0,
     )
+
+
+# ── Bonuses ───────────────────────────────────────────────────────────────────
 
 
 @router.get("/bonuses", response_model=PaginatedResponse)
@@ -444,15 +497,16 @@ async def get_bonuses(
         .offset(offset)
         .limit(page_size)
     )
-    records = result.scalars().all()
-
     return PaginatedResponse(
-        items=[BonusResponse.model_validate(r) for r in records],
+        items=[BonusResponse.model_validate(r) for r in result.scalars().all()],
         total=total,
         page=page,
         page_size=page_size,
         total_pages=(total + page_size - 1) // page_size if page_size > 0 else 0,
     )
+
+
+# ── Payouts ───────────────────────────────────────────────────────────────────
 
 
 @router.get("/payouts", response_model=PaginatedResponse)
@@ -483,10 +537,8 @@ async def get_payouts(
         .offset(offset)
         .limit(page_size)
     )
-    records = result.scalars().all()
-
     return PaginatedResponse(
-        items=[PayoutResponse.model_validate(r) for r in records],
+        items=[PayoutResponse.model_validate(r) for r in result.scalars().all()],
         total=total,
         page=page,
         page_size=page_size,
@@ -494,40 +546,27 @@ async def get_payouts(
     )
 
 
-@router.get("/territory", response_model=TerritoryResponse | None)
-async def get_territory(
+# ── Travel incentives ─────────────────────────────────────────────────────────
+
+
+@router.get("/travel", response_model=list[TravelIncentiveResponse])
+async def get_travel_incentives(
     perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.models.ambassador_programs import AmbassadorTerritory
-
     ambassador = await _get_or_none(perms.id, db)
-    if ambassador is None or ambassador.territory_id is None:
-        return None
+    if ambassador is None:
+        return []
 
-    terr_result = await db.execute(
-        select(AmbassadorTerritory).where(
-            AmbassadorTerritory.id == ambassador.territory_id
-        )
+    result = await db.execute(
+        select(AmbassadorTravelIncentive)
+        .where(AmbassadorTravelIncentive.ambassador_id == ambassador.id)
+        .order_by(AmbassadorTravelIncentive.qualification_start.desc())
     )
-    territory = terr_result.scalar_one_or_none()
-    if territory is None:
-        return None
+    return [TravelIncentiveResponse.model_validate(t) for t in result.scalars().all()]
 
-    count_result = await db.execute(
-        select(func.count(Ambassador.id)).where(Ambassador.territory_id == territory.id)
-    )
-    ambassador_count = count_result.scalar() or 0
 
-    return TerritoryResponse(
-        id=territory.id,
-        name=territory.name,
-        territory_type=territory.territory_type,
-        description=territory.description,
-        revenue_share_pct=float(territory.revenue_share_pct),
-        master_ambassador_id=territory.master_ambassador_id,
-        ambassador_count=ambassador_count,
-    )
+# ── Training ──────────────────────────────────────────────────────────────────
 
 
 @router.get("/training", response_model=TrainingResponse)
@@ -551,11 +590,15 @@ async def get_training(
         TrainingModuleSchema(
             key=m["key"],
             name=m["name"],
-            tier=m["tier"],
+            rank=m["rank"],
             duration_min=m["duration_min"],
             completed=m["key"] in completed_map,
             completed_at=completed_map.get(m["key"]),
         )
         for m in TRAINING_MODULES
     ]
-    return TrainingResponse(modules=modules)
+    return TrainingResponse(
+        modules=modules,
+        completed_count=len(completed_map),
+        total_count=len(TRAINING_MODULES),
+    )

@@ -101,10 +101,16 @@ class BillingCycle(str, enum.Enum):
 
 
 class AmbassadorRank(str, enum.Enum):
-    SCOUT = "scout"
-    GUIDE = "guide"
-    STRATEGIST = "strategist"
-    MASTER = "master"
+    ASSOCIATE = "associate"
+    BRONZE_LEADER = "bronze_leader"
+    SILVER_LEADER = "silver_leader"
+    GOLD_LEADER = "gold_leader"
+    PLATINUM_LEADER = "platinum_leader"
+    DIAMOND_LEADER = "diamond_leader"
+    ELITE_DIAMOND = "elite_diamond"
+    BLACK_DIAMOND = "black_diamond"
+    CROWN_AMBASSADOR = "crown_ambassador"
+    GRAND_CROWN = "grand_crown"
 
 
 class TerritoryType(str, enum.Enum):
@@ -119,11 +125,19 @@ class CommissionStatus(str, enum.Enum):
 
 
 class BonusType(str, enum.Enum):
-    CONVERSION = "conversion"
-    RETENTION = "retention"
-    MILESTONE = "milestone"
-    TIER_PROMOTION = "tier_promotion"
-    ANNUAL_RECOGNITION = "annual_recognition"
+    RANK_ADVANCEMENT = "rank_advancement"
+    PERFORMANCE_MILESTONE = "performance_milestone"
+    FAST_START = "fast_start"
+    LOYALTY_RETENTION = "loyalty_retention"
+    LEADERSHIP_POOL = "leadership_pool"
+    GENERATIONAL_OVERRIDE = "generational_override"
+
+
+class TravelStatus(str, enum.Enum):
+    QUALIFYING = "qualifying"
+    QUALIFIED = "qualified"
+    AWARDED = "awarded"
+    EXPIRED = "expired"
 
 
 class PayoutStatus(str, enum.Enum):
@@ -131,6 +145,32 @@ class PayoutStatus(str, enum.Enum):
     PROCESSING = "processing"
     PAID = "paid"
     FAILED = "failed"
+
+
+class AmbassadorStatus(str, enum.Enum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    UNDER_REVIEW = "under_review"
+
+
+class ActivityEventType(str, enum.Enum):
+    REGISTERED = "registered"
+    RANK_CHANGED = "rank_changed"
+    COMMISSION_CALCULATED = "commission_calculated"
+    COMMISSION_PAID = "commission_paid"
+    BONUS_AWARDED = "bonus_awarded"
+    BONUS_PAID = "bonus_paid"
+    PAYOUT_CREATED = "payout_created"
+    PAYOUT_STATUS_CHANGED = "payout_status_changed"
+    PAYOUT_CANCELLED = "payout_cancelled"
+    REFERRAL_JOINED = "referral_joined"
+    TRAVEL_AWARDED = "travel_awarded"
+    TRAVEL_STATUS_CHANGED = "travel_status_changed"
+    TRAINING_COMPLETED = "training_completed"
+    TRAINING_REMOVED = "training_removed"
+    STATUS_CHANGED = "status_changed"
+    ADMIN_NOTE_ADDED = "admin_note_added"
+    POOL_CALCULATED = "pool_calculated"
 
 
 class TicketStatus(str, enum.Enum):

@@ -1,14 +1,15 @@
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.types import GUID
 
 from app.db.base import Base, TimestampMixin
-from app.models.enums import AmbassadorRank
+from app.models.enums import AmbassadorRank, AmbassadorStatus
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
         AmbassadorBonus,
         AmbassadorPayout,
         AmbassadorTrainingCompletion,
+        AmbassadorTravelIncentive,
+        AmbassadorActivityLog,
     )
 
 
@@ -37,7 +40,7 @@ class Ambassador(Base, TimestampMixin):
             name="ambassador_rank_enum",
             values_callable=lambda obj: [e.value for e in obj],
         ),
-        default=AmbassadorRank.SCOUT,
+        default=AmbassadorRank.ASSOCIATE,
     )
     referral_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     referred_by: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -45,12 +48,34 @@ class Ambassador(Base, TimestampMixin):
         ForeignKey("ambassadors.id", ondelete="SET NULL"),
         nullable=True,
     )
-    team_size: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── V2 qualification tracking ────────────────────────────────────
+    par_count: Mapped[int] = mapped_column(Integer, default=0)
+    tav_count: Mapped[int] = mapped_column(Integer, default=0)
+    rank_achieved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fast_start_claimed: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Admin control ────────────────────────────────────────────────
+    status: Mapped[AmbassadorStatus] = mapped_column(
+        SAEnum(
+            AmbassadorStatus,
+            name="ambassador_status_enum",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        default=AmbassadorStatus.ACTIVE,
+    )
+    admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Legacy / summary fields ──────────────────────────────────────
     total_referrals: Mapped[int] = mapped_column(Integer, default=0)
     rewards_earned: Mapped[float] = mapped_column(
         Numeric(precision=18, scale=8), default=0.0
     )
     payout_address: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # ── Legacy territory (kept for DB FK safety; not used in V2) ─────
     territory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("ambassador_territories.id", ondelete="SET NULL"),
@@ -81,5 +106,11 @@ class Ambassador(Base, TimestampMixin):
         back_populates="ambassador", cascade="all, delete-orphan"
     )
     training_completions: Mapped[list["AmbassadorTrainingCompletion"]] = relationship(
+        back_populates="ambassador", cascade="all, delete-orphan"
+    )
+    travel_incentives: Mapped[list["AmbassadorTravelIncentive"]] = relationship(
+        back_populates="ambassador", cascade="all, delete-orphan"
+    )
+    activity_logs: Mapped[list["AmbassadorActivityLog"]] = relationship(
         back_populates="ambassador", cascade="all, delete-orphan"
     )
