@@ -56,7 +56,9 @@ async def log_activity(
             actor=actor,
         )
         db.add(entry)
-        await db.flush()
+        # No flush here — flushing inside a try/except poisons the PostgreSQL
+        # transaction if it fails (session enters ABORTED state). Let the caller's
+        # flush/commit handle persistence.
     except Exception:
         logger.exception(
             "Failed to write activity log for ambassador %s", ambassador_id
