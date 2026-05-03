@@ -814,6 +814,8 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
             direction=SignalDirection.BUY,
             confidence=0.9,
             entry_price=Decimal("50000"),
+            take_profit=Decimal("55000"),
+            stop_loss=Decimal("47500"),
             status=SignalStatus.NEW,
         )
         session.add(signal)
