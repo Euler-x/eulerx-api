@@ -106,6 +106,7 @@ class AmbassadorCommission(Base, TimestampMixin):
             CommissionStatus,
             name="commission_status_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         default=CommissionStatus.PENDING,
     )
@@ -139,6 +140,7 @@ class AmbassadorBonus(Base, TimestampMixin):
             BonusType,
             name="bonus_type_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         nullable=False,
     )
@@ -150,6 +152,7 @@ class AmbassadorBonus(Base, TimestampMixin):
             CommissionStatus,
             name="commission_status_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         default=CommissionStatus.PENDING,
     )
@@ -180,6 +183,7 @@ class AmbassadorPayout(Base, TimestampMixin):
             PayoutStatus,
             name="payout_status_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         default=PayoutStatus.PENDING,
     )
@@ -249,6 +253,7 @@ class LeadershipRevenuePool(Base, TimestampMixin):
             CommissionStatus,
             name="commission_status_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         default=CommissionStatus.PENDING,
     )
@@ -279,6 +284,7 @@ class AmbassadorTravelIncentive(Base, TimestampMixin):
             AmbassadorRank,
             name="ambassador_rank_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         nullable=False,
     )
@@ -294,6 +300,7 @@ class AmbassadorTravelIncentive(Base, TimestampMixin):
             TravelStatus,
             name="travel_status_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         default=TravelStatus.QUALIFYING,
     )
@@ -386,6 +393,7 @@ class TerritoryCommission(Base, TimestampMixin):
             CommissionStatus,
             name="commission_status_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         default=CommissionStatus.PENDING,
     )
