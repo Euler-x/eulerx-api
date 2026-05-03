@@ -195,6 +195,19 @@ class TrainingResponse(BaseModel):
     total_count: int
 
 
+# ── Territory ────────────────────────────────────────────────────────────────
+
+
+class TerritoryResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    territory_type: str
+    description: Optional[str] = None
+    revenue_share_pct: float
+
+    model_config = {"from_attributes": True}
+
+
 # ── Admin schemas ─────────────────────────────────────────────────────────────
 
 

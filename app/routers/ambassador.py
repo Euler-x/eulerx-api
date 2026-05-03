@@ -15,6 +15,7 @@ from app.models.ambassador_programs import (
     AmbassadorBonus,
     AmbassadorCommission,
     AmbassadorPayout,
+    AmbassadorTerritory,
     AmbassadorTrainingCompletion,
     AmbassadorTravelIncentive,
 )
@@ -30,6 +31,7 @@ from app.models.schemas.ambassador import (
     RankProgress,
     ReferralItem,
     ReferralResponse,
+    TerritoryResponse,
     TrainingModuleSchema,
     TrainingResponse,
     TravelIncentiveResponse,
@@ -602,3 +604,26 @@ async def get_training(
         completed_count=len(completed_map),
         total_count=len(TRAINING_MODULES),
     )
+
+
+# ── Territory ─────────────────────────────────────────────────────────────────
+
+
+@router.get("/territory", response_model=TerritoryResponse | None)
+async def get_territory(
+    perms: UserPermissions = RequireVerified,
+    db: AsyncSession = Depends(get_db),
+):
+    ambassador = await _get_or_none(perms.id, db)
+    if ambassador is None or ambassador.territory_id is None:
+        return None
+
+    result = await db.execute(
+        select(AmbassadorTerritory).where(
+            AmbassadorTerritory.id == ambassador.territory_id
+        )
+    )
+    territory = result.scalar_one_or_none()
+    if territory is None:
+        return None
+    return TerritoryResponse.model_validate(territory)
