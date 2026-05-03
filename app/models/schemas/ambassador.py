@@ -201,6 +201,7 @@ class TrainingResponse(BaseModel):
 class AdminAmbassadorResponse(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
+    full_name: Optional[str] = None
     masked_email: Optional[str] = None
     rank: AmbassadorRank
     status: AmbassadorStatus = AmbassadorStatus.ACTIVE

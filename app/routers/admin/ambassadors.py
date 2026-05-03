@@ -104,6 +104,7 @@ async def _enrich_ambassador(
     return AdminAmbassadorResponse(
         id=amb.id,
         user_id=amb.user_id,
+        full_name=user.full_name if user else None,
         masked_email=_mask_email(user.email if user else None),
         rank=amb.rank,
         status=amb.status,

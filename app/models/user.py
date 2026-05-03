@@ -47,6 +47,8 @@ class User(Base, TimestampMixin):
         Boolean, default=False, server_default="false"
     )
 
+    full_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
     # Email verification
     email: Mapped[Optional[str]] = mapped_column(
         String(255), unique=True, index=True, nullable=True
