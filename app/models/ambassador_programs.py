@@ -47,6 +47,7 @@ class AmbassadorTerritory(Base, TimestampMixin):
             TerritoryType,
             name="territory_type_enum",
             values_callable=lambda obj: [e.value for e in obj],
+            native_enum=False,
         ),
         nullable=False,
     )
