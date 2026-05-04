@@ -290,11 +290,25 @@ class AIEngineService:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         valid_results = []
+        failed_count = 0
         for r in results:
             if isinstance(r, dict) and r is not None:
                 valid_results.append(r)
             elif isinstance(r, Exception):
                 logger.error(f"Model query exception: {r}")
+                failed_count += 1
+            else:
+                # None return = HTTP error / parse failure (already logged in query_model)
+                failed_count += 1
+
+        if not valid_results and self.models:
+            logger.error(
+                "ALL %d AI model queries failed for %s — "
+                "check OpenRouter API key, credits, and rate limits",
+                len(self.models),
+                symbol,
+            )
+
         return valid_results
 
     def aggregate_signals(
@@ -627,5 +641,14 @@ class AIEngineService:
             hold_count,
             len(symbols),
         )
+
+        if not generated_signals and symbols:
+            logger.warning(
+                "Zero signals generated from %d symbols. "
+                "If this persists, check: (1) OpenRouter API key/credits, "
+                "(2) ate_confidence_threshold in dynamic config, "
+                "(3) market filters (SL distance, R:R, overextension).",
+                len(symbols),
+            )
 
         return generated_signals
