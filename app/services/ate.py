@@ -686,76 +686,78 @@ class ATEService:
             if is_bybit:
                 # Confirm TP/SL via set_trading_stop — this is a backup to the
                 # inline TP/SL set at order placement. Both must be present (the
-                # safety gate above guarantees this). If confirmation fails,
-                # close the position immediately rather than leave it unprotected.
+                # safety gate above guarantees this). If confirmation fails for
+                # ANY reason, close the position immediately rather than leave it
+                # unprotected. Reuse the api_key/api_secret already decrypted
+                # above to avoid a second decryption that could fail independently.
                 if tp_price is not None and sl_price is not None:
+                    _tpsl_confirmed = False
                     try:
-                        bybit_keys = self._get_bybit_keys(user)
-                        if bybit_keys:
-                            api_key, api_secret = bybit_keys
-                            user_bybit = self._get_user_bybit_service(user)
-                            tpsl_result = await user_bybit.place_tp_sl_orders(
-                                api_key=api_key,
-                                api_secret=api_secret,
-                                symbol=signal.symbol,
-                                is_buy=is_buy,
-                                take_profit_price=tp_price,
-                                stop_loss_price=sl_price,
+                        tpsl_result = await user_bybit.place_tp_sl_orders(
+                            api_key=api_key,
+                            api_secret=api_secret,
+                            symbol=signal.symbol,
+                            is_buy=is_buy,
+                            take_profit_price=tp_price,
+                            stop_loss_price=sl_price,
+                        )
+                        if tpsl_result.get("success"):
+                            _tpsl_confirmed = True
+                            logger.info(
+                                "Bybit TP/SL confirmed for %s: tp=$%s sl=$%s",
+                                signal.symbol,
+                                tp_price,
+                                sl_price,
                             )
-                            if tpsl_result.get("success"):
-                                logger.info(
-                                    "Bybit TP/SL confirmed for %s: tp=$%s sl=$%s",
-                                    signal.symbol,
-                                    tp_price,
-                                    sl_price,
-                                )
-                            else:
-                                logger.error(
-                                    "Bybit set_trading_stop failed for %s: %s "
-                                    "— inline TP/SL at order placement may still be active; "
-                                    "closing position as safety measure",
-                                    signal.symbol,
-                                    tpsl_result.get("error"),
-                                )
-                                try:
-                                    close_result = await user_bybit.close_position(
-                                        api_key=api_key,
-                                        api_secret=api_secret,
-                                        symbol=signal.symbol,
-                                        size=quantity,
-                                        is_buy=is_buy,
-                                    )
-                                    if close_result.get("success"):
-                                        execution.status = ExecutionStatus.FAILED
-                                        execution.error_message = (
-                                            f"Position closed: TP/SL confirmation failed "
-                                            f"({tpsl_result.get('error', 'unknown')})"
-                                        )
-                                        logger.warning(
-                                            "Emergency close successful for %s — "
-                                            "execution marked FAILED",
-                                            signal.symbol,
-                                        )
-                                    else:
-                                        logger.error(
-                                            "Emergency close FAILED for %s: %s — "
-                                            "MANUAL INTERVENTION REQUIRED",
-                                            signal.symbol,
-                                            close_result.get("error"),
-                                        )
-                                except Exception as close_err:
-                                    logger.error(
-                                        "Exception during emergency close for %s: %s — "
-                                        "MANUAL INTERVENTION REQUIRED",
-                                        signal.symbol,
-                                        close_err,
-                                    )
+                        else:
+                            logger.error(
+                                "Bybit set_trading_stop failed for %s: %s "
+                                "— closing position as safety measure",
+                                signal.symbol,
+                                tpsl_result.get("error"),
+                            )
                     except Exception as e:
                         logger.error(
-                            "Exception confirming Bybit TP/SL for %s: %s",
+                            "Exception confirming Bybit TP/SL for %s: %s "
+                            "— closing position as safety measure",
                             signal.symbol,
                             e,
                         )
+
+                    if not _tpsl_confirmed:
+                        try:
+                            close_result = await user_bybit.close_position(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                symbol=signal.symbol,
+                                size=quantity,
+                                is_buy=is_buy,
+                            )
+                            if close_result.get("success"):
+                                execution.status = ExecutionStatus.FAILED
+                                execution.error_message = (
+                                    "Position closed: TP/SL confirmation failed — "
+                                    "risk management could not be applied"
+                                )
+                                logger.warning(
+                                    "Emergency close successful for %s — "
+                                    "execution marked FAILED",
+                                    signal.symbol,
+                                )
+                            else:
+                                logger.error(
+                                    "Emergency close FAILED for %s: %s — "
+                                    "MANUAL INTERVENTION REQUIRED",
+                                    signal.symbol,
+                                    close_result.get("error"),
+                                )
+                        except Exception as close_err:
+                            logger.error(
+                                "Exception during emergency close for %s: %s — "
+                                "MANUAL INTERVENTION REQUIRED",
+                                signal.symbol,
+                                close_err,
+                            )
                 else:
                     # Should never reach here — safety gate above blocks orders without TP/SL.
                     # If somehow reached, close the position immediately.
