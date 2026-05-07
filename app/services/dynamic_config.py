@@ -74,6 +74,13 @@ CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "label": "Bybit Symbols",
         "description": "Number of top movers to analyze from Bybit per run.",
     },
+    "binance_symbols_limit": {
+        "value": 6,
+        "type": "int",
+        "category": "Pipeline",
+        "label": "Binance Symbols",
+        "description": "Number of top movers to analyze from Binance per run.",
+    },
     # ── Subscription ───────────────────────────────────────────
     "subscription_grace_period_days": {
         "value": settings.subscription_grace_period_days,
