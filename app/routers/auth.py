@@ -10,6 +10,8 @@ from app.models.ambassador import Ambassador
 from app.models.enums import WalletType
 from app.models.schemas.auth import (
     AuthResponse,
+    BinanceConnectRequest,
+    BinanceConnectResponse,
     BybitConnectRequest,
     BybitConnectResponse,
     EmailSubmitRequest,
@@ -534,5 +536,65 @@ async def disconnect_bybit(
     return BybitConnectResponse(
         message="Bybit account disconnected",
         bybit_configured=False,
+        account_equity=0.0,
+    )
+
+
+# ── Binance API Key Connection ─────────────────────────────────────
+
+
+@router.post("/binance/connect", response_model=BinanceConnectResponse)
+async def connect_binance(
+    request: BinanceConnectRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Connect a Binance USDⓈ-M Futures account using API key + secret.
+
+    The API key must have Futures trading permissions. Keys are validated
+    by fetching the account balance before saving.
+    """
+    from app.services.binance import BinanceService
+
+    binance = BinanceService(testnet=request.testnet)
+    valid, message = await binance.validate_api_keys(
+        request.api_key, request.api_secret
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Binance API key validation failed: {message}",
+        )
+
+    current_user.binance_api_key_encrypted = encrypt_private_key(request.api_key)
+    current_user.binance_api_secret_encrypted = encrypt_private_key(request.api_secret)
+    current_user.binance_testnet = request.testnet
+    await db.flush()
+
+    equity = await binance.get_account_value(request.api_key, request.api_secret)
+
+    env_label = "testnet" if request.testnet else "mainnet"
+    return BinanceConnectResponse(
+        message=f"Binance Futures {env_label} account connected successfully",
+        binance_configured=True,
+        testnet=request.testnet,
+        account_equity=equity,
+    )
+
+
+@router.post("/binance/disconnect", response_model=BinanceConnectResponse)
+async def disconnect_binance(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Disconnect Binance account by removing stored API keys."""
+    current_user.binance_api_key_encrypted = None
+    current_user.binance_api_secret_encrypted = None
+    current_user.binance_testnet = False
+    await db.flush()
+
+    return BinanceConnectResponse(
+        message="Binance account disconnected",
+        binance_configured=False,
         account_equity=0.0,
     )

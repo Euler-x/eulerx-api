@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.models.binance_signal import BinanceSignal
 from app.models.bybit_signal import BybitSignal
 from app.models.enums import Exchange, SignalDirection, SignalStatus
 from app.models.signal import Signal
@@ -224,7 +225,12 @@ class AIEngineService:
 
         # Determine exchange name for prompt context
         exchange_raw = market_data.get("exchange", "hyperliquid")
-        exchange_name = "Bybit" if exchange_raw == "bybit" else "HyperLiquid"
+        if exchange_raw == "bybit":
+            exchange_name = "Bybit"
+        elif exchange_raw == "binance":
+            exchange_name = "Binance"
+        else:
+            exchange_name = "HyperLiquid"
 
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
             exchange_name=exchange_name,
@@ -435,6 +441,16 @@ class AIEngineService:
         for row in bb_result.all():
             keys.add((row[0], "bybit"))
 
+        # Binance signals
+        bn_result = await db.execute(
+            select(BinanceSignal.symbol).where(
+                BinanceSignal.status == SignalStatus.NEW,
+                BinanceSignal.expires_at > now,
+            )
+        )
+        for row in bn_result.all():
+            keys.add((row[0], "binance"))
+
         return keys
 
     async def generate_signals(
@@ -606,7 +622,6 @@ class AIEngineService:
                 sell_count += 1
 
             # Create the right signal model based on exchange
-            is_bybit = exchange_str == Exchange.BYBIT.value
             signal_kwargs = dict(
                 symbol=symbol,
                 direction=aggregated["direction"],
@@ -621,7 +636,9 @@ class AIEngineService:
                 model_responses=aggregated["model_responses"],
             )
 
-            if is_bybit:
+            if exchange_str == Exchange.BINANCE.value:
+                signal = BinanceSignal(**signal_kwargs)
+            elif exchange_str == Exchange.BYBIT.value:
                 signal = BybitSignal(**signal_kwargs)
             else:
                 signal = Signal(**signal_kwargs)

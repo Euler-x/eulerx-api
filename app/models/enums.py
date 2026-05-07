@@ -204,3 +204,4 @@ class ContentType(str, enum.Enum):
 class Exchange(str, enum.Enum):
     HYPERLIQUID = "hyperliquid"
     BYBIT = "bybit"
+    BINANCE = "binance"

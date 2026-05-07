@@ -61,6 +61,7 @@ class UserResponse(BaseModel):
     has_wallet: bool = False
     telegram_configured: bool = False
     bybit_configured: bool = False
+    binance_configured: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -122,5 +123,23 @@ class BybitConnectRequest(BaseModel):
 class BybitConnectResponse(BaseModel):
     message: str
     bybit_configured: bool
+    testnet: bool = False
+    account_equity: float = 0.0
+
+
+class BinanceConnectRequest(BaseModel):
+    api_key: str = Field(..., min_length=10, description="Binance Futures API key")
+    api_secret: str = Field(
+        ..., min_length=10, description="Binance Futures API secret"
+    )
+    testnet: bool = Field(
+        default=False,
+        description="True for Binance Futures testnet, False for mainnet",
+    )
+
+
+class BinanceConnectResponse(BaseModel):
+    message: str
+    binance_configured: bool
     testnet: bool = False
     account_equity: float = 0.0

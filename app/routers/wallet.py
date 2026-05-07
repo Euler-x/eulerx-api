@@ -3,7 +3,12 @@ import logging
 from fastapi import APIRouter
 
 from app.middleware.permissions import RequireAuth, UserPermissions
-from app.models.schemas.wallet import BybitBalanceResponse, WalletBalanceResponse
+from app.models.schemas.wallet import (
+    BinanceBalanceResponse,
+    BybitBalanceResponse,
+    WalletBalanceResponse,
+)
+from app.services.binance import BinanceService
 from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.utils.helpers import utc_now
@@ -142,6 +147,74 @@ async def get_bybit_balance(
         return BybitBalanceResponse(
             connected=True,
             testnet=user.bybit_testnet,
+            api_key_masked=key_masked,
+            last_synced=None,
+        )
+
+
+@router.get("/binance-balance", response_model=BinanceBalanceResponse)
+async def get_binance_balance(
+    perms: UserPermissions = RequireAuth,
+):
+    """Fetch the user's Binance USDⓈ-M Futures account balance."""
+    user = perms.user
+
+    if not user.binance_api_key_encrypted or not user.binance_api_secret_encrypted:
+        return BinanceBalanceResponse(connected=False)
+
+    try:
+        api_key = decrypt_private_key(user.binance_api_key_encrypted)
+        api_secret = decrypt_private_key(user.binance_api_secret_encrypted)
+    except Exception as e:
+        logger.error("Failed to decrypt Binance keys for user %s: %s", user.id, e)
+        return BinanceBalanceResponse(
+            connected=True, testnet=user.binance_testnet, last_synced=None
+        )
+
+    key_masked = f"{api_key[:6]}...{api_key[-4:]}"
+    svc = BinanceService(testnet=user.binance_testnet)
+
+    try:
+        balances = await svc.get_balance(api_key, api_secret)
+        usdt = next((b for b in balances if b.get("asset") == "USDT"), None)
+        if not usdt:
+            return BinanceBalanceResponse(
+                connected=True,
+                testnet=user.binance_testnet,
+                api_key_masked=key_masked,
+                last_synced=None,
+            )
+
+        equity = float(usdt.get("balance", 0))
+        available = float(usdt.get("availableBalance", 0))
+        unrealized_pnl = float(usdt.get("crossUnPnl", 0))
+
+        open_positions = 0
+        try:
+            positions = await svc.get_user_positions(api_key, api_secret)
+            open_positions = len(positions)
+            if unrealized_pnl == 0.0:
+                for pos in positions.values():
+                    unrealized_pnl += pos.get("unrealized_pnl", 0.0)
+        except Exception as e:
+            logger.error("Failed to fetch Binance positions: %s", e)
+
+        return BinanceBalanceResponse(
+            connected=True,
+            testnet=user.binance_testnet,
+            account_equity=round(equity, 2),
+            available_balance=round(available, 2),
+            unrealized_pnl=round(unrealized_pnl, 2),
+            total_balance=round(equity, 2),
+            open_positions=open_positions,
+            api_key_masked=key_masked,
+            last_synced=utc_now().isoformat(),
+        )
+    except Exception as e:
+        logger.error("Failed to fetch Binance balance: %s", e)
+        return BinanceBalanceResponse(
+            connected=True,
+            testnet=user.binance_testnet,
             api_key_masked=key_masked,
             last_synced=None,
         )

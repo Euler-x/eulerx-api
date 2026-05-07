@@ -21,6 +21,7 @@ from app.db.base import Base
 from app.models.enums import Exchange, ExecutionStatus, OrderType, SignalDirection
 
 if TYPE_CHECKING:
+    from app.models.binance_signal import BinanceSignal
     from app.models.bybit_signal import BybitSignal
     from app.models.signal import Signal
     from app.models.strategy import Strategy
@@ -40,6 +41,12 @@ class Execution(Base):
     bybit_signal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("bybit_signals.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    binance_signal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(),
+        ForeignKey("binance_signals.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
@@ -125,6 +132,10 @@ class Execution(Base):
         back_populates="executions",
         foreign_keys=[bybit_signal_id],
     )
+    binance_signal: Mapped[Optional["BinanceSignal"]] = relationship(
+        back_populates="executions",
+        foreign_keys=[binance_signal_id],
+    )
     user: Mapped["User"] = relationship(back_populates="executions")
     strategy: Mapped["Strategy"] = relationship(back_populates="executions")
 
@@ -139,5 +150,10 @@ class Execution(Base):
             "bybit_signal_id",
             "strategy_id",
             name="uq_execution_bybit_signal_strategy",
+        ),
+        UniqueConstraint(
+            "binance_signal_id",
+            "strategy_id",
+            name="uq_execution_binance_signal_strategy",
         ),
     )

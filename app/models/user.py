@@ -86,6 +86,17 @@ class User(Base, TimestampMixin):
         Boolean, default=False, server_default="false"
     )
 
+    # Binance USDⓈ-M Futures API credentials (encrypted)
+    binance_api_key_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    binance_api_secret_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    binance_testnet: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
     # Notification preferences (JSON: {category}_{channel} -> bool)
     notification_preferences: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True
@@ -102,6 +113,12 @@ class User(Base, TimestampMixin):
     @property
     def bybit_configured(self) -> bool:
         return bool(self.bybit_api_key_encrypted and self.bybit_api_secret_encrypted)
+
+    @property
+    def binance_configured(self) -> bool:
+        return bool(
+            self.binance_api_key_encrypted and self.binance_api_secret_encrypted
+        )
 
     strategies: Mapped[list["Strategy"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

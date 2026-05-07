@@ -102,6 +102,9 @@ async def test_fetch_market_data(setup_db):
     mock_bybit = [
         {"symbol": "BTCUSDT", "price": "50000"},
     ]
+    mock_binance = [
+        {"symbol": "ETHUSDT", "price": "3000"},
+    ]
 
     with (
         patch(
@@ -114,14 +117,21 @@ async def test_fetch_market_data(setup_db):
             new_callable=AsyncMock,
             return_value=mock_bybit,
         ),
+        patch(
+            "app.worker.tasks.BinanceService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=mock_binance,
+        ),
     ):
         result = await _fetch_market_data_async()
 
-    assert len(result) == 3
+    assert len(result) == 4
     assert result[0]["symbol"] == "BTC"
     assert result[0]["exchange"] == "hyperliquid"
     assert result[2]["symbol"] == "BTCUSDT"
     assert result[2]["exchange"] == "bybit"
+    assert result[3]["symbol"] == "ETHUSDT"
+    assert result[3]["exchange"] == "binance"
 
 
 # ── Test: Get Active Strategy IDs ──────────────────────────────────
@@ -526,6 +536,11 @@ async def test_run_analysis_pipeline_no_market_data(setup_db):
         ),
         patch(
             "app.worker.tasks.BybitService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "app.worker.tasks.BinanceService.get_top_movers",
             new_callable=AsyncMock,
             return_value=[],
         ),

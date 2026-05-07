@@ -33,12 +33,14 @@ import app.models.database  # noqa: F401  — register all models before any que
 from app.models.billing import Subscription
 from app.models.admin_config import AdminConfig
 from app.models.enums import SignalStatus, SubscriptionStatus
+from app.models.binance_signal import BinanceSignal
 from app.models.bybit_signal import BybitSignal
 from app.models.signal import Signal
 from app.models.strategy import Strategy
 from app.models.enums import Exchange
 from app.services.ai_engine import AIEngineService
 from app.services.ate import ATEService
+from app.services.binance import BinanceService
 from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.services.notifications import NotificationService
@@ -69,22 +71,25 @@ async def _is_task_disabled(task_name: str) -> bool:
 
 
 async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid AND Bybit, merge and return."""
+    """Fetch market data from Hyperliquid, Bybit, and Binance; merge and return."""
     from app.services.dynamic_config import get_config
-
-    hl_limit = await get_config("hl_symbols_limit", 4)
-    bybit_limit = await get_config("bybit_symbols_limit", 6)
-
-    hl_service = HyperliquidService()
-    bybit_service = BybitService()
 
     import asyncio
 
+    hl_limit = await get_config("hl_symbols_limit", 4)
+    bybit_limit = await get_config("bybit_symbols_limit", 6)
+    binance_limit = await get_config("binance_symbols_limit", 6)
+
+    hl_service = HyperliquidService()
+    bybit_service = BybitService()
+    binance_service = BinanceService()
+
     hl_task = hl_service.get_top_movers(limit=hl_limit)
     bybit_task = bybit_service.get_top_movers(limit=bybit_limit)
+    binance_task = binance_service.get_top_movers(limit=binance_limit)
 
-    hl_results, bybit_results = await asyncio.gather(
-        hl_task, bybit_task, return_exceptions=True
+    hl_results, bybit_results, binance_results = await asyncio.gather(
+        hl_task, bybit_task, binance_task, return_exceptions=True
     )
 
     symbols: list[dict] = []
@@ -105,8 +110,16 @@ async def _fetch_market_data_async() -> list[dict]:
     else:
         logger.error("Bybit fetch failed: %s", bybit_results)
 
+    if isinstance(binance_results, list):
+        for s in binance_results:
+            s["exchange"] = Exchange.BINANCE.value
+        symbols.extend(binance_results)
+        logger.info("Fetched %d symbols from Binance", len(binance_results))
+    else:
+        logger.error("Binance fetch failed: %s", binance_results)
+
     logger.info(
-        "Total %d symbols from both exchanges: %s",
+        "Total %d symbols from all exchanges: %s",
         len(symbols),
         ", ".join(
             f"{s.get('symbol', '?')}({s.get('exchange', '?')})" for s in symbols[:10]
@@ -146,7 +159,12 @@ async def _generate_signals_async(market_data: list[dict]) -> list[dict]:
                 await session.commit()
                 result = []
                 for s in signals:
-                    exchange = "bybit" if isinstance(s, BybitSignal) else "hyperliquid"
+                    if isinstance(s, BinanceSignal):
+                        exchange = "binance"
+                    elif isinstance(s, BybitSignal):
+                        exchange = "bybit"
+                    else:
+                        exchange = "hyperliquid"
                     result.append({"id": str(s.id), "exchange": exchange})
                 logger.info("Generated %d signals", len(signals))
                 return result
@@ -185,10 +203,14 @@ async def _execute_signal_for_strategy_async(
                 return {"status": "skipped", "reason": "Trading is halted"}
 
             # Load signal from the correct table
-            from app.models.bybit_signal import BybitSignal
-
             is_bybit_signal = exchange == "bybit"
-            SignalModel = BybitSignal if is_bybit_signal else Signal
+            is_binance_signal = exchange == "binance"
+            if is_binance_signal:
+                SignalModel = BinanceSignal
+            elif is_bybit_signal:
+                SignalModel = BybitSignal
+            else:
+                SignalModel = Signal
 
             try:
                 signal_uuid = uuid.UUID(signal_id)
@@ -233,9 +255,15 @@ async def _execute_signal_for_strategy_async(
 
             # Check exchange compatibility — skip early without creating
             # a failed execution record (avoids DB noise)
+            if is_binance_signal and not user.binance_configured:
+                return {"status": "skipped", "reason": "User has no Binance keys"}
             if is_bybit_signal and not user.bybit_configured:
                 return {"status": "skipped", "reason": "User has no Bybit keys"}
-            if not is_bybit_signal and not user.wallet_address:
+            if (
+                not is_bybit_signal
+                and not is_binance_signal
+                and not user.wallet_address
+            ):
                 return {"status": "skipped", "reason": "User has no HL wallet"}
 
             # Verify user has ATE access via subscription
@@ -310,7 +338,7 @@ async def _execute_signal_for_strategy_async(
 
 
 async def _expire_stale_signals_async() -> int:
-    """Mark expired signals (both HL and Bybit). Returns count of expired signals."""
+    """Mark expired signals (HL, Bybit, and Binance). Returns count of expired signals."""
     async with async_session_factory() as session:
         try:
             now = utc_now()
@@ -342,13 +370,27 @@ async def _expire_stale_signals_async() -> int:
                 signal.status = SignalStatus.EXPIRED
             total_expired += len(stale_bybit)
 
+            # Expire Binance signals
+            result_bn = await session.execute(
+                select(BinanceSignal).where(
+                    BinanceSignal.status == SignalStatus.NEW,
+                    BinanceSignal.expires_at != None,  # noqa: E711
+                    BinanceSignal.expires_at < now,
+                )
+            )
+            stale_binance = result_bn.scalars().all()
+            for signal in stale_binance:
+                signal.status = SignalStatus.EXPIRED
+            total_expired += len(stale_binance)
+
             if total_expired:
                 await session.commit()
                 logger.info(
-                    "Expired %d stale signals (%d HL, %d Bybit)",
+                    "Expired %d stale signals (%d HL, %d Bybit, %d Binance)",
                     total_expired,
                     len(stale_signals),
                     len(stale_bybit),
+                    len(stale_binance),
                 )
 
             return total_expired

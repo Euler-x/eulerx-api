@@ -13,11 +13,13 @@ from app.models.enums import (
     SignalDirection,
     SignalStatus,
 )
+from app.models.binance_signal import BinanceSignal
 from app.models.bybit_signal import BybitSignal
 from app.models.execution import Execution
 from app.models.signal import Signal
 from app.models.strategy import Strategy
 from app.models.user import User
+from app.services.binance import BinanceService
 from app.services.bybit import BybitService
 from app.services.execution_sync import ExecutionSyncService
 from app.services.hyperliquid import HyperliquidService
@@ -159,6 +161,39 @@ class ATEService:
             logger.error("Failed to fetch Bybit balance for user %s: %s", user.id, e)
             return None
 
+    def _get_binance_keys(self, user: User) -> tuple[str, str] | None:
+        """Decrypt and return (api_key, api_secret) for a Binance-configured user."""
+        if not user.binance_configured:
+            return None
+        try:
+            api_key = decrypt_private_key(user.binance_api_key_encrypted)
+            api_secret = decrypt_private_key(user.binance_api_secret_encrypted)
+            return api_key, api_secret
+        except ValueError:
+            logger.error("Failed to decrypt Binance keys for user %s", user.id)
+            return None
+
+    def _get_user_binance_service(self, user: User) -> BinanceService:
+        """Get a BinanceService configured for this user's testnet/mainnet setting."""
+        return BinanceService(testnet=getattr(user, "binance_testnet", False))
+
+    async def _get_binance_balance(self, user: User) -> float | None:
+        """Fetch available USDT balance from Binance Futures."""
+        keys = self._get_binance_keys(user)
+        if not keys:
+            return None
+        api_key, api_secret = keys
+        try:
+            binance = self._get_user_binance_service(user)
+            balance = await binance.get_available_balance(api_key, api_secret)
+            if balance <= 0:
+                return None
+            logger.info("User %s Binance balance: $%.2f", user.id, balance)
+            return balance
+        except Exception as e:
+            logger.error("Failed to fetch Binance balance for user %s: %s", user.id, e)
+            return None
+
     async def _get_wallet_balance(self, user: User) -> float | None:
         """Fetch the user's available perps margin from HyperLiquid.
 
@@ -218,7 +253,7 @@ class ATEService:
 
     def _create_failed_execution(
         self,
-        signal: Signal | BybitSignal,
+        signal: Signal | BybitSignal | BinanceSignal,
         user: User,
         strategy: Strategy,
         error_message: str,
@@ -226,27 +261,39 @@ class ATEService:
     ) -> Execution:
         """Create a FAILED execution record with an error message."""
         is_bb = isinstance(signal, BybitSignal)
+        is_bn = isinstance(signal, BinanceSignal)
         return Execution(
-            signal_id=None if is_bb else signal.id,
+            signal_id=None if (is_bb or is_bn) else signal.id,
             bybit_signal_id=signal.id if is_bb else None,
+            binance_signal_id=signal.id if is_bn else None,
             user_id=user.id,
             strategy_id=strategy.id,
             wallet_address_hash=user.wallet_address_hash
-            or f"bybit:{str(user.id)[:16]}",
+            or (
+                f"binance:{str(user.id)[:16]}"
+                if is_bn
+                else f"bybit:{str(user.id)[:16]}"
+            ),
             order_type=OrderType.MARKET,
             direction=signal.direction,
             entry_price=entry_price or float(signal.entry_price),
             quantity=0,
             leverage=strategy.leverage_limit or settings.ate_default_leverage,
             status=ExecutionStatus.FAILED,
-            exchange=Exchange.BYBIT if is_bb else Exchange.HYPERLIQUID,
+            exchange=(
+                Exchange.BYBIT
+                if is_bb
+                else Exchange.BINANCE
+                if is_bn
+                else Exchange.HYPERLIQUID
+            ),
             error_message=error_message[:500],
         )
 
     async def execute_signal(
         self,
         db: AsyncSession,
-        signal: Signal | BybitSignal,
+        signal: Signal | BybitSignal | BinanceSignal,
         strategy: Strategy,
         user: User,
     ) -> Execution | None:
@@ -265,8 +312,14 @@ class ATEService:
         # ── Per-(signal, strategy) idempotency ───────────────────────
         # Signals are shared across strategies. Prevent the same strategy
         # from executing the same signal twice.
-        # For Bybit signals, signal_id is NULL — check bybit_signal_id instead.
-        if isinstance(signal, BybitSignal):
+        if isinstance(signal, BinanceSignal):
+            existing = await db.execute(
+                select(func.count(Execution.id)).where(
+                    Execution.binance_signal_id == signal.id,
+                    Execution.strategy_id == strategy.id,
+                )
+            )
+        elif isinstance(signal, BybitSignal):
             existing = await db.execute(
                 select(func.count(Execution.id)).where(
                     Execution.bybit_signal_id == signal.id,
@@ -290,11 +343,20 @@ class ATEService:
 
         # Resolve exchange type once — used by all checks below.
         is_bybit = isinstance(signal, BybitSignal)
+        is_binance = isinstance(signal, BinanceSignal)
 
         # Prevent duplicate open positions for the same user on the same symbol.
-        # Covers the case where multiple active strategies (or a pipeline retry)
-        # would otherwise each open a separate position on the same asset.
-        if is_bybit:
+        if is_binance:
+            open_pos_query = (
+                select(func.count(Execution.id))
+                .join(BinanceSignal, Execution.binance_signal_id == BinanceSignal.id)
+                .where(
+                    Execution.user_id == user.id,
+                    Execution.status == ExecutionStatus.FILLED,
+                    BinanceSignal.symbol == signal.symbol,
+                )
+            )
+        elif is_bybit:
             open_pos_query = (
                 select(func.count(Execution.id))
                 .join(BybitSignal, Execution.bybit_signal_id == BybitSignal.id)
@@ -324,10 +386,26 @@ class ATEService:
             return None
 
         # ── Determine exchange for this signal ─────────────────────────
-        signal_exchange = Exchange.BYBIT if is_bybit else Exchange.HYPERLIQUID
+        signal_exchange = (
+            Exchange.BINANCE
+            if is_binance
+            else Exchange.BYBIT
+            if is_bybit
+            else Exchange.HYPERLIQUID
+        )
 
         # ── Pre-execution wallet/key checks ───────────────────────────
-        if is_bybit:
+        if is_binance:
+            if not user.binance_configured:
+                logger.warning("User %s has no Binance keys, skipping", user.id)
+                execution = self._create_failed_execution(
+                    signal, user, strategy, "No Binance API keys configured"
+                )
+                db.add(execution)
+                await db.flush()
+                return execution
+            available_balance = await self._get_binance_balance(user)
+        elif is_bybit:
             if not user.bybit_configured:
                 logger.warning("User %s has no Bybit keys, skipping", user.id)
                 execution = self._create_failed_execution(
@@ -397,14 +475,21 @@ class ATEService:
 
         # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
-        if is_bybit:
+        import math as _math
+
+        if is_binance:
+            user_binance = self._get_user_binance_service(user)
+            lot_info = await user_binance.get_lot_size_info(signal.symbol)
+            qty_step = lot_info["qty_step"]
+            max_order_qty = lot_info["max_order_qty"]
+            sz_decimals = (
+                max(0, -int(_math.floor(_math.log10(qty_step)))) if qty_step > 0 else 3
+            )
+        elif is_bybit:
             user_bybit = self._get_user_bybit_service(user)
             lot_info = await user_bybit.get_lot_size_info(signal.symbol)
             qty_step = lot_info["qty_step"]
             max_order_qty = lot_info["max_order_qty"]
-            # Derive decimals from qty_step (e.g. 0.001 → 3)
-            import math as _math
-
             sz_decimals = (
                 max(0, -int(_math.floor(_math.log10(qty_step)))) if qty_step > 0 else 3
             )
@@ -491,13 +576,19 @@ class ATEService:
 
         # Create execution record (idempotency: unique signal_id + strategy_id)
         is_bb_signal = isinstance(signal, BybitSignal)
+        is_bn_signal = isinstance(signal, BinanceSignal)
         execution = Execution(
-            signal_id=None if is_bb_signal else signal.id,
+            signal_id=None if (is_bb_signal or is_bn_signal) else signal.id,
             bybit_signal_id=signal.id if is_bb_signal else None,
+            binance_signal_id=signal.id if is_bn_signal else None,
             user_id=user.id,
             strategy_id=strategy.id,
             wallet_address_hash=user.wallet_address_hash
-            or f"bybit:{str(user.id)[:16]}",
+            or (
+                f"binance:{str(user.id)[:16]}"
+                if is_bn_signal
+                else f"bybit:{str(user.id)[:16]}"
+            ),
             order_type=OrderType.MARKET,
             direction=signal.direction,
             entry_price=entry_price,
@@ -597,6 +688,92 @@ class ATEService:
                 execution.error_message = str(error_msg)[:500]
                 logger.error(
                     "Bybit order FAILED for signal %s: %s", signal.id, error_msg
+                )
+
+        elif is_binance:
+            # ── Binance USDⓈ-M Futures execution path ────────────────
+            binance_keys = self._get_binance_keys(user)
+            if not binance_keys:
+                execution.status = ExecutionStatus.FAILED
+                execution.error_message = "Failed to decrypt Binance keys"
+                await db.flush()
+                return execution
+            api_key, api_secret = binance_keys
+
+            # Detect ONE_WAY vs HEDGE mode (determines positionSide param)
+            hedge_mode = await user_binance.get_position_mode(api_key, api_secret)
+            position_side = ("LONG" if is_buy else "SHORT") if hedge_mode else "BOTH"
+
+            # Set leverage — retry with lower values if symbol has a cap
+            actual_leverage = target_leverage
+            if target_leverage >= 1:
+                for lev in [target_leverage, 10, 5, 3, 1]:
+                    lev_result = await user_binance.update_leverage(
+                        api_key, api_secret, signal.symbol, lev
+                    )
+                    if lev_result.get("success"):
+                        actual_leverage = lev
+                        break
+                    err = str(lev_result.get("error", ""))
+                    if "leverage not changed" in err.lower():
+                        actual_leverage = lev
+                        break
+                    logger.warning(
+                        "Failed to set Binance leverage to %dx for %s: %s",
+                        lev,
+                        signal.symbol,
+                        err,
+                    )
+                    if lev == 1:
+                        break
+
+            if actual_leverage != target_leverage and actual_leverage > 0:
+                ratio = actual_leverage / target_leverage
+                quantity = round(quantity * ratio, sz_decimals)
+                if quantity > max_order_qty and max_order_qty < float("inf"):
+                    quantity = round(max_order_qty, sz_decimals)
+                notional = quantity * entry_price
+
+            logger.info(
+                "Placing Binance order: %s %s qty=%s @ $%.2f (notional=$%.2f) "
+                "leverage=%dx positionSide=%s for user %s strategy %s",
+                "BUY" if is_buy else "SELL",
+                signal.symbol,
+                quantity,
+                entry_price,
+                notional,
+                actual_leverage,
+                position_side,
+                user.id,
+                strategy.id,
+            )
+
+            order_result = await user_binance.place_order(
+                api_key=api_key,
+                api_secret=api_secret,
+                symbol=signal.symbol,
+                is_buy=is_buy,
+                size=quantity,
+                order_type="market",
+                position_side=position_side,
+            )
+
+            if order_result.get("success"):
+                execution.status = ExecutionStatus.FILLED
+                execution.exchange_order_id = str(order_result.get("oid", ""))
+                execution.tx_hash = str(order_result.get("tx_hash", ""))
+                execution.executed_at = utc_now()
+                logger.info(
+                    "Binance order FILLED for signal %s: order_id=%s",
+                    signal.id,
+                    execution.exchange_order_id,
+                )
+            else:
+                execution.status = ExecutionStatus.FAILED
+                error_msg = order_result.get("error", "unknown")
+                execution.error_message = str(error_msg)[:500]
+                logger.error(
+                    "Binance order FAILED for signal %s: %s", signal.id, error_msg
                 )
 
         else:
@@ -785,6 +962,80 @@ class ATEService:
                             signal.symbol,
                             e,
                         )
+            elif is_binance:
+                # Binance: place TP and SL via /fapi/v1/order STOP_MARKET / TAKE_PROFIT_MARKET
+                # Reuse api_key/api_secret and position_side from order placement above.
+                if tp_price is not None and sl_price is not None:
+                    _tpsl_confirmed = False
+                    try:
+                        tpsl_result = await user_binance.place_tp_sl_orders(
+                            api_key=api_key,
+                            api_secret=api_secret,
+                            symbol=signal.symbol,
+                            is_buy=is_buy,
+                            take_profit_price=tp_price,
+                            stop_loss_price=sl_price,
+                            position_side=position_side,
+                        )
+                        if tpsl_result.get("success"):
+                            _tpsl_confirmed = True
+                            logger.info(
+                                "Binance TP/SL confirmed for %s: tp=$%s sl=$%s",
+                                signal.symbol,
+                                tp_price,
+                                sl_price,
+                            )
+                        else:
+                            logger.error(
+                                "Binance TP/SL failed for %s: %s "
+                                "— closing position as safety measure",
+                                signal.symbol,
+                                tpsl_result.get("results"),
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "Exception placing Binance TP/SL for %s: %s "
+                            "— closing position as safety measure",
+                            signal.symbol,
+                            e,
+                        )
+
+                    if not _tpsl_confirmed:
+                        try:
+                            close_result = await user_binance.close_position(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                symbol=signal.symbol,
+                                size=quantity,
+                                is_buy=is_buy,
+                                position_side=position_side,
+                            )
+                            if close_result.get("success"):
+                                execution.status = ExecutionStatus.FAILED
+                                execution.error_message = (
+                                    "Position closed: TP/SL placement failed — "
+                                    "risk management could not be applied"
+                                )
+                                logger.warning(
+                                    "Emergency close successful for Binance %s — "
+                                    "execution marked FAILED",
+                                    signal.symbol,
+                                )
+                            else:
+                                logger.error(
+                                    "Binance emergency close FAILED for %s: %s — "
+                                    "MANUAL INTERVENTION REQUIRED",
+                                    signal.symbol,
+                                    close_result.get("error"),
+                                )
+                        except Exception as close_err:
+                            logger.error(
+                                "Exception during Binance emergency close for %s: %s — "
+                                "MANUAL INTERVENTION REQUIRED",
+                                signal.symbol,
+                                close_err,
+                            )
+
             else:
                 # Hyperliquid: separate TP/SL order calls
                 if tp_price is not None or sl_price is not None:
@@ -861,10 +1112,12 @@ class ATEService:
         daily_pnl = result.scalar() or 0.0
 
         # Use wallet balance to calculate drawdown percentage
-        # Try Bybit first if configured, then Hyperliquid
+        # Try Bybit / Binance first if configured, then Hyperliquid
         available_balance = None
         if user.bybit_configured:
             available_balance = await self._get_bybit_balance(user)
+        if available_balance is None and user.binance_configured:
+            available_balance = await self._get_binance_balance(user)
         if available_balance is None:
             available_balance = await self._get_wallet_balance(user)
         if available_balance is None or available_balance <= 0:
@@ -917,6 +1170,7 @@ class ATEService:
             .options(
                 selectinload(Execution.signal),
                 selectinload(Execution.bybit_signal),
+                selectinload(Execution.binance_signal),
                 selectinload(Execution.strategy),
                 selectinload(Execution.user),
             )
@@ -933,15 +1187,21 @@ class ATEService:
         # Split executions by exchange
         hl_executions: list[Execution] = []
         bybit_executions: list[Execution] = []
+        binance_executions: list[Execution] = []
         for ex in open_executions:
             if not ex.user:
                 continue
-            # Must have either HL signal or Bybit signal
-            has_signal = ex.signal is not None or ex.bybit_signal is not None
+            has_signal = (
+                ex.signal is not None
+                or ex.bybit_signal is not None
+                or ex.binance_signal is not None
+            )
             if not has_signal:
                 continue
             ex_exchange = getattr(ex, "exchange", Exchange.HYPERLIQUID)
-            if ex_exchange == Exchange.BYBIT:
+            if ex_exchange == Exchange.BINANCE:
+                binance_executions.append(ex)
+            elif ex_exchange == Exchange.BYBIT:
                 bybit_executions.append(ex)
             else:
                 hl_executions.append(ex)
@@ -1181,6 +1441,127 @@ class ATEService:
                 if result_entry:
                     closed.append(result_entry)
 
+        # ── Monitor Binance positions ──────────────────────────────────
+        by_binance_user: dict[str, list[Execution]] = {}
+        for execution in binance_executions:
+            user = execution.user
+            if not user or not user.binance_configured:
+                continue
+            by_binance_user.setdefault(str(user.id), []).append(execution)
+
+        for _uid, executions in by_binance_user.items():
+            user = executions[0].user
+            binance_keys = self._get_binance_keys(user)
+            if not binance_keys:
+                continue
+            api_key, api_secret = binance_keys
+            user_binance = self._get_user_binance_service(user)
+
+            try:
+                binance_positions = await user_binance.get_user_positions(
+                    api_key, api_secret
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to fetch Binance positions for user %s: %s", user.id, e
+                )
+                continue
+
+            for execution in executions:
+                signal = execution.binance_signal or execution.signal
+                strategy = execution.strategy
+                if not signal or not strategy:
+                    continue
+
+                symbol = signal.symbol
+                entry_price = float(execution.entry_price)
+                is_buy = execution.direction == SignalDirection.BUY
+
+                bn_pos = binance_positions.get(symbol)
+                if bn_pos is not None:
+                    continue
+
+                # Position gone on Binance — get PnL from income history.
+                # Binance income records carry the PnL but NOT the exit price,
+                # so we always need the ticker fallback for the exit price.
+                closed_pnl = 0.0
+                close_hash = None
+                closed_at = None
+                pnl_from_api = False
+                try:
+                    closed_pnl_data = await user_binance.get_closed_pnl(
+                        api_key,
+                        api_secret,
+                        symbol,
+                        start_time_ms=int(
+                            ExecutionSyncService.get_execution_opened_at(
+                                execution
+                            ).timestamp()
+                            * 1000
+                        ),
+                        limit=20,
+                    )
+                    if closed_pnl_data:
+                        closed_pnl = closed_pnl_data.get("pnl", 0.0)
+                        close_hash = closed_pnl_data.get("close_hash")
+                        closed_at = closed_pnl_data.get("closed_at")
+                        pnl_from_api = True
+                        logger.info(
+                            "Binance income PnL for %s: pnl=%.4f", symbol, closed_pnl
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to get Binance income PnL for %s: %s", symbol, e
+                    )
+
+                # Fetch ticker for exit price (always required — income API has no exit price)
+                exit_price = 0.0
+                try:
+                    ticker = await user_binance.get_ticker(symbol)
+                    if ticker:
+                        bid = float(ticker.get("bidPrice") or 0)
+                        ask = float(ticker.get("askPrice") or 0)
+                        mid = (
+                            (bid + ask) / 2
+                            if bid > 0 and ask > 0
+                            else float(ticker.get("lastPrice") or 0)
+                        )
+                        if mid > 0:
+                            exit_price = mid
+                            if not pnl_from_api:
+                                q = float(execution.quantity)
+                                closed_pnl = (
+                                    (mid - entry_price) * q
+                                    if is_buy
+                                    else (entry_price - mid) * q
+                                )
+                except Exception as e:
+                    logger.error("Failed to fetch Binance ticker for %s: %s", symbol, e)
+
+                if exit_price <= 0:
+                    logger.warning(
+                        "Cannot determine Binance exit price for %s execution %s — "
+                        "skipping, will retry on next monitor cycle",
+                        symbol,
+                        execution.id,
+                    )
+                    continue
+
+                result_entry = self._reconcile_closed_position(
+                    execution,
+                    signal,
+                    strategy,
+                    user,
+                    exit_price,
+                    close_hash,
+                    closed_pnl,
+                    closed_at,
+                    notification_service,
+                    close_source="monitor",
+                )
+                if result_entry:
+                    closed.append(result_entry)
+
         if closed:
             await db.flush()
 
@@ -1197,7 +1578,7 @@ class ATEService:
     def _reconcile_closed_position(
         self,
         execution: Execution,
-        signal: Signal | BybitSignal,
+        signal: Signal | BybitSignal | BinanceSignal,
         strategy: Strategy | None,
         user: User,
         exit_price: float,
