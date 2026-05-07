@@ -33,6 +33,7 @@ from app.services.notifications import NotificationService
 from app.services.turnstile import verify_turnstile
 from app.services.wallet import WalletService
 from app.utils.helpers import generate_referral_code, utc_now
+from app.services import telegram_templates
 from app.utils.security import (
     create_access_token,
     create_refresh_token,
@@ -77,6 +78,7 @@ async def register(
     await db.flush()
 
     # Handle referral
+    referrer_user: User | None = None
     if request.referral_code:
         ref_result = await db.execute(
             select(Ambassador).where(Ambassador.referral_code == request.referral_code)
@@ -91,9 +93,30 @@ async def register(
             db.add(ambassador)
             referrer.total_referrals += 1
             referrer.team_size += 1
+            ref_user_result = await db.execute(
+                select(User).where(User.id == referrer.user_id)
+            )
+            referrer_user = ref_user_result.scalar_one_or_none()
+
+    notification_service = NotificationService()
+
+    # Notify referrer of new signup
+    if referrer_user:
+        await notification_service.send_referral_signup_email(
+            ambassador_user=referrer_user,
+            referred_email=request.email,
+        )
+
+    # Admin alert for new signup
+    await notification_service.send_admin_alert(
+        telegram_templates.admin_new_signup(
+            identifier=request.email,
+            method="Email/Password",
+            referral=referrer_user is not None,
+        )
+    )
 
     # Send verification email
-    notification_service = NotificationService()
     await notification_service.send_verification_email(db, user)
 
     access_token = create_access_token(str(user.id), user.is_admin)
@@ -142,6 +165,12 @@ async def login(
     access_token = create_access_token(str(user.id), user.is_admin)
     refresh_token = create_refresh_token(str(user.id))
 
+    # Login alert via Telegram
+    notification_service = NotificationService()
+    login_time = utc_now().strftime("%Y-%m-%d %H:%M UTC")
+    ip = http_request.client.host if http_request.client else None
+    await notification_service.send_login_alert(user, login_time, ip)
+
     return AuthResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -155,6 +184,7 @@ async def login(
 @router.post("/connect", response_model=AuthResponse)
 async def connect_wallet(
     request: WalletConnectRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_optional_user_strict),
 ):
@@ -209,9 +239,23 @@ async def connect_wallet(
         )
         db.add(user)
         await db.flush()
+        # Notify admin of new wallet signup
+        ns = NotificationService()
+        await ns.send_admin_alert(
+            telegram_templates.admin_new_signup(
+                identifier=request.wallet_address[:10] + "...",
+                method="Wallet Connect",
+            )
+        )
 
     access_token = create_access_token(str(user.id), user.is_admin)
     refresh_token = create_refresh_token(str(user.id))
+
+    # Login alert via Telegram (for returning wallet users)
+    notification_service = NotificationService()
+    login_time = utc_now().strftime("%Y-%m-%d %H:%M UTC")
+    ip = http_request.client.host if http_request.client else None
+    await notification_service.send_login_alert(user, login_time, ip)
 
     return AuthResponse(
         access_token=access_token,
@@ -263,6 +307,16 @@ async def generate_wallet(
                     ambassador_user=referrer_user,
                     referred_wallet_hash=wallet_data["address_hash"],
                 )
+
+    # Admin alert for new wallet signup
+    ns = NotificationService()
+    await ns.send_admin_alert(
+        telegram_templates.admin_new_signup(
+            identifier=wallet_data["address"][:10] + "...",
+            method="Generated Wallet",
+            referral=bool(request.referral_code),
+        )
+    )
 
     access_token = create_access_token(str(user.id), user.is_admin)
     refresh_token = create_refresh_token(str(user.id))

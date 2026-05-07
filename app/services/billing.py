@@ -18,6 +18,7 @@ from app.models.enums import (
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.notifications import NotificationService
+from app.services import telegram_templates
 from app.utils.helpers import add_days, add_months, utc_now
 
 logger = logging.getLogger(__name__)
@@ -267,10 +268,11 @@ class BillingService:
         if user:
             user.is_subscribed = True
 
-        # Send subscription activated email
+        # Send subscription activated email + admin alert
         try:
             if user:
                 notification_service = NotificationService()
+                plan_name = plan.name if plan else "Unknown"
                 expires_str = (
                     subscription.expires_at.strftime("%B %d, %Y")
                     if subscription.expires_at
@@ -278,9 +280,18 @@ class BillingService:
                 )
                 await notification_service.send_subscription_activated(
                     user=user,
-                    plan_name=plan.name if plan else "Unknown",
+                    plan_name=plan_name,
                     billing_cycle=plan.billing_cycle.value if plan else "N/A",
                     expires_at=expires_str,
+                )
+                # Admin alert for new payment
+                await notification_service.send_admin_alert(
+                    telegram_templates.admin_new_payment(
+                        amount=str(plan.price_usd) if plan else "?",
+                        currency="USD",
+                        plan=plan_name,
+                        user=user.email or str(user.id)[:8],
+                    )
                 )
         except Exception as e:
             logger.error("Failed to send subscription activated email: %s", e)

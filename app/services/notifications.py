@@ -504,3 +504,49 @@ class NotificationService:
 
         text = telegram_templates.referral_signup(referred_wallet_hash)
         await self._dispatch_telegram(ambassador_user, "referrals", text)
+
+    async def send_referral_signup_email(
+        self,
+        ambassador_user: User,
+        referred_email: str,
+    ) -> None:
+        """Referral notification when referree signed up via email. Category: referrals."""
+        referred_hash = referred_email  # pass through; template masks it
+        subject, html = email_templates.referral_signup(referred_hash)
+        await self._dispatch_email(ambassador_user, "referrals", subject, html)
+
+        text = telegram_templates.referral_signup_email(referred_email)
+        await self._dispatch_telegram(ambassador_user, "referrals", text)
+
+    async def send_login_alert(
+        self,
+        user: User,
+        login_time: str,
+        ip_address: str | None = None,
+    ) -> None:
+        """Security alert sent to the user on each successful login. Telegram only."""
+        if self._has_telegram(user):
+            token = self._get_telegram_token(user)
+            if token:
+                try:
+                    text = telegram_templates.login_alert(login_time, ip_address)
+                    await self.send_telegram(token, user.telegram_chat_id, text)
+                except Exception as e:
+                    logger.error("Telegram send_login_alert failed: %s", e)
+
+    async def send_admin_alert(self, text: str) -> None:
+        """Send a plain-text alert to the configured admin Telegram chat.
+
+        Uses ADMIN_TELEGRAM_BOT_TOKEN / ADMIN_TELEGRAM_CHAT_ID from settings.
+        Silently skips if not configured.
+        """
+        if not settings.admin_telegram_bot_token or not settings.admin_telegram_chat_id:
+            return
+        try:
+            await self.send_telegram(
+                settings.admin_telegram_bot_token,
+                settings.admin_telegram_chat_id,
+                text,
+            )
+        except Exception as e:
+            logger.error("Admin Telegram alert failed: %s", e)

@@ -173,6 +173,16 @@ class Settings(BaseSettings):
         description="Backend base URL used for webhook callbacks (e.g. NOWPayments IPN)",
     )
 
+    # Admin Telegram Alerts (platform-owner notifications)
+    admin_telegram_bot_token: str = Field(
+        default="",
+        description="Telegram bot token for admin-level platform alerts (signups, payments, etc.)",
+    )
+    admin_telegram_chat_id: str = Field(
+        default="",
+        description="Telegram chat ID that receives admin alerts",
+    )
+
     # Notification Rate Limiting
     notification_rate_limit_per_user: int = Field(
         default=10,

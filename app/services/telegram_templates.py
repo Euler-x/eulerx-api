@@ -4,6 +4,14 @@ Each function returns a formatted string using Telegram HTML parse mode.
 """
 
 
+def _ex_label(exchange: str) -> str:
+    if exchange == "bybit":
+        return "Bybit"
+    if exchange == "binance":
+        return "Binance"
+    return "HyperLiquid"
+
+
 def trade_executed(
     symbol: str,
     direction: str,
@@ -13,10 +21,10 @@ def trade_executed(
     exchange: str = "hyperliquid",
 ) -> str:
     arrow = "\U0001f7e2" if direction.upper() == "BUY" else "\U0001f534"
-    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
+    label = _ex_label(exchange)
     return (
-        f"{arrow} <b>Trade Executed</b> \u2014 {ex_label}\n\n"
-        f"<b>Exchange:</b> {ex_label}\n"
+        f"{arrow} <b>Trade Executed</b> \u2014 {label}\n\n"
+        f"<b>Exchange:</b> {label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Symbol:</b> {symbol}\n"
         f"<b>Direction:</b> {direction.upper()}\n"
@@ -34,10 +42,10 @@ def take_profit_hit(
     strategy_name: str,
     exchange: str = "hyperliquid",
 ) -> str:
-    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
+    label = _ex_label(exchange)
     return (
-        f"\U0001f3af <b>Take Profit Hit!</b> \u2014 {ex_label}\n\n"
-        f"<b>Exchange:</b> {ex_label}\n"
+        f"\U0001f3af <b>Take Profit Hit!</b> \u2014 {label}\n\n"
+        f"<b>Exchange:</b> {label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Symbol:</b> {symbol}\n"
         f"<b>Direction:</b> {direction.upper()}\n"
@@ -56,10 +64,10 @@ def stop_loss_hit(
     strategy_name: str,
     exchange: str = "hyperliquid",
 ) -> str:
-    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
+    label = _ex_label(exchange)
     return (
-        f"\U0001f6d1 <b>Stop Loss Triggered</b> \u2014 {ex_label}\n\n"
-        f"<b>Exchange:</b> {ex_label}\n"
+        f"\U0001f6d1 <b>Stop Loss Triggered</b> \u2014 {label}\n\n"
+        f"<b>Exchange:</b> {label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Symbol:</b> {symbol}\n"
         f"<b>Direction:</b> {direction.upper()}\n"
@@ -73,10 +81,10 @@ def signal_generated(
     strategy_name: str, signal_count: int, exchange: str = "hyperliquid"
 ) -> str:
     plural = "s" if signal_count != 1 else ""
-    ex_label = "Bybit" if exchange == "bybit" else "HyperLiquid"
+    label = _ex_label(exchange)
     return (
-        f"\U0001f4e1 <b>{signal_count} New Signal{plural}</b> \u2014 {ex_label}\n\n"
-        f"<b>Exchange:</b> {ex_label}\n"
+        f"\U0001f4e1 <b>{signal_count} New Signal{plural}</b> \u2014 {label}\n\n"
+        f"<b>Exchange:</b> {label}\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"{signal_count} new trading signal{plural} ready for execution."
     )
@@ -137,4 +145,42 @@ def referral_signup(referred_wallet_hash: str) -> str:
     return (
         f"\U0001f91d <b>New Referral Signup</b>\n\n"
         f"Wallet <code>{masked}</code> signed up using your referral link!"
+    )
+
+
+def referral_signup_email(referred_email: str) -> str:
+    masked = referred_email[:3] + "***" + referred_email[referred_email.find("@") :]
+    return (
+        f"\U0001f91d <b>New Referral Signup</b>\n\n"
+        f"<code>{masked}</code> signed up using your referral link!"
+    )
+
+
+def login_alert(login_time: str, ip_address: str | None = None) -> str:
+    text = (
+        f"\U0001f510 <b>New Login Detected</b>\n\n"
+        f"A new login to your EulerX account was detected.\n"
+        f"<b>Time:</b> {login_time}"
+    )
+    if ip_address:
+        text += f"\n<b>IP:</b> {ip_address}"
+    text += "\n\nIf this wasn't you, secure your account immediately."
+    return text
+
+
+def admin_new_signup(identifier: str, method: str, referral: bool = False) -> str:
+    ref_note = " (via referral)" if referral else ""
+    return (
+        f"\U0001f195 <b>New User Signup</b>{ref_note}\n\n"
+        f"<b>Method:</b> {method}\n"
+        f"<b>User:</b> <code>{identifier}</code>"
+    )
+
+
+def admin_new_payment(amount: str, currency: str, plan: str, user: str) -> str:
+    return (
+        f"\U0001f4b0 <b>Payment Received</b>\n\n"
+        f"<b>Plan:</b> {plan}\n"
+        f"<b>Amount:</b> {amount} {currency.upper()}\n"
+        f"<b>User:</b> <code>{user}</code>"
     )
