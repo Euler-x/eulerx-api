@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import app.models.database  # noqa: F401 — registers all ORM models before sqladmin mapper config
 from app.admin import setup_admin
 from app.config import get_settings
 from app.db.init_db import check_db_connection, dispose_engine
