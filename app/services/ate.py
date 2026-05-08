@@ -303,6 +303,13 @@ class ATEService:
         default_leverage = await get_config(
             "ate_default_leverage", settings.ate_default_leverage, db
         )
+        buy_signals_enabled = int(await get_config("buy_signals_enabled", 1, db))
+        buy_confidence_threshold = float(
+            await get_config("buy_confidence_threshold", 0.79, db)
+        )
+        buy_min_sl_distance_pct = float(
+            await get_config("buy_min_sl_distance_pct", 2.5, db)
+        )
 
         rate_key = f"ate:{user.id}"
         if not ate_rate_limiter.check(rate_key):
@@ -473,6 +480,30 @@ class ATEService:
             await db.flush()
             return execution
 
+        # ── Option E: SELL-only mode ─────────────────────────────────
+        if signal.direction == SignalDirection.BUY and not buy_signals_enabled:
+            reason = "BUY signals are currently disabled (SELL-only mode active)"
+            logger.info("Signal %s rejected: %s", signal.id, reason)
+            execution = self._create_failed_execution(signal, user, strategy, reason)
+            db.add(execution)
+            await db.flush()
+            return execution
+
+        # ── Option A: BUY-specific confidence threshold ──────────────
+        if (
+            signal.direction == SignalDirection.BUY
+            and float(signal.confidence) < buy_confidence_threshold
+        ):
+            reason = (
+                f"BUY confidence {float(signal.confidence):.2f} below BUY threshold "
+                f"{buy_confidence_threshold:.2f}"
+            )
+            logger.info("Signal %s rejected: %s", signal.id, reason)
+            execution = self._create_failed_execution(signal, user, strategy, reason)
+            db.add(execution)
+            await db.flush()
+            return execution
+
         # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
         import math as _math
@@ -573,6 +604,22 @@ class ATEService:
             return execution
 
         is_buy = signal.direction == SignalDirection.BUY
+
+        # ── Option B: BUY minimum SL distance ────────────────────────
+        if is_buy and _pre_sl is not None and _pre_sl > 0 and entry_price > 0:
+            sl_distance_pct = (entry_price - _pre_sl) / entry_price * 100
+            if sl_distance_pct < buy_min_sl_distance_pct:
+                reason = (
+                    f"BUY SL distance {sl_distance_pct:.2f}% is below minimum "
+                    f"{buy_min_sl_distance_pct:.1f}% — stop too tight for this asset"
+                )
+                logger.info("Signal %s rejected: %s", signal.id, reason)
+                execution = self._create_failed_execution(
+                    signal, user, strategy, reason, entry_price
+                )
+                db.add(execution)
+                await db.flush()
+                return execution
 
         # Create execution record (idempotency: unique signal_id + strategy_id)
         is_bb_signal = isinstance(signal, BybitSignal)

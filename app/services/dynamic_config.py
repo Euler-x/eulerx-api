@@ -52,6 +52,27 @@ CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "label": "Max Drawdown %",
         "description": "Default max daily drawdown % before strategy auto-pause.",
     },
+    "buy_signals_enabled": {
+        "value": 0,
+        "type": "int",
+        "category": "Trading",
+        "label": "BUY Signals Enabled",
+        "description": "Set to 0 to disable all BUY execution (SELL-only mode). Set to 1 to re-enable BUY signals.",
+    },
+    "buy_confidence_threshold": {
+        "value": 0.79,
+        "type": "float",
+        "category": "Trading",
+        "label": "BUY Confidence Threshold",
+        "description": "Minimum AI confidence required to execute a BUY signal. Overrides the general threshold for BUY direction only.",
+    },
+    "buy_min_sl_distance_pct": {
+        "value": 2.5,
+        "type": "float",
+        "category": "Trading",
+        "label": "BUY Min SL Distance (%)",
+        "description": "BUY signals with stop loss closer than this % from entry are rejected. Prevents SL hits from normal market noise on volatile assets.",
+    },
     # ── Analysis Pipeline ──────────────────────────────────────
     "analysis_schedule_hours": {
         "value": settings.analysis_schedule_hours,
