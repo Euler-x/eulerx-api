@@ -307,9 +307,6 @@ class ATEService:
         buy_confidence_threshold = float(
             await get_config("buy_confidence_threshold", 0.79, db)
         )
-        buy_min_sl_distance_pct = float(
-            await get_config("buy_min_sl_distance_pct", 2.5, db)
-        )
 
         rate_key = f"ate:{user.id}"
         if not ate_rate_limiter.check(rate_key):
@@ -605,13 +602,17 @@ class ATEService:
 
         is_buy = signal.direction == SignalDirection.BUY
 
-        # ── Option B: BUY minimum SL distance ────────────────────────
-        if is_buy and _pre_sl is not None and _pre_sl > 0 and entry_price > 0:
-            sl_distance_pct = (entry_price - _pre_sl) / entry_price * 100
-            if sl_distance_pct < buy_min_sl_distance_pct:
+        # ── Option B: BUY symbol blocklist ───────────────────────────
+        if is_buy:
+            blocklist_raw = str(await get_config("buy_symbol_blocklist", "", db))
+            blocklist = {
+                s.strip().upper() for s in blocklist_raw.split(",") if s.strip()
+            }
+            symbol_upper = signal.symbol.upper()
+            if symbol_upper in blocklist:
                 reason = (
-                    f"BUY SL distance {sl_distance_pct:.2f}% is below minimum "
-                    f"{buy_min_sl_distance_pct:.1f}% — stop too tight for this asset"
+                    f"{signal.symbol} is on the BUY symbol blocklist "
+                    f"— historically high stop-loss rate"
                 )
                 logger.info("Signal %s rejected: %s", signal.id, reason)
                 execution = self._create_failed_execution(

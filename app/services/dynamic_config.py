@@ -66,12 +66,12 @@ CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "label": "BUY Confidence Threshold",
         "description": "Minimum AI confidence required to execute a BUY signal. Overrides the general threshold for BUY direction only.",
     },
-    "buy_min_sl_distance_pct": {
-        "value": 2.5,
-        "type": "float",
+    "buy_symbol_blocklist": {
+        "value": "RESOLV,CHILLGUY,SUPER,CFX,IP,BABY,GRIFFAIN,BIO",
+        "type": "str",
         "category": "Trading",
-        "label": "BUY Min SL Distance (%)",
-        "description": "BUY signals with stop loss closer than this % from entry are rejected. Prevents SL hits from normal market noise on volatile assets.",
+        "label": "BUY Symbol Blocklist",
+        "description": "Comma-separated symbols never allowed to execute as BUY. Pre-loaded with historically high SL-rate assets.",
     },
     # ── Analysis Pipeline ──────────────────────────────────────
     "analysis_schedule_hours": {
