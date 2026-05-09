@@ -21,6 +21,7 @@ from app.models.enums import (
     SubscriptionStatus,
     WalletType,
 )
+from app.models.admin_config import AdminConfig
 from app.models.billing import Plan, Subscription
 from app.models.execution import Execution
 from app.models.signal import Signal
@@ -834,6 +835,8 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
             status=SignalStatus.NEW,
         )
         session.add(signal)
+        # Enable BUY signals so the test isn't blocked by the SELL-only default
+        session.add(AdminConfig(key="buy_signals_enabled", value={"value": 1}))
         await session.commit()
 
     async with TestSessionFactory() as session:
