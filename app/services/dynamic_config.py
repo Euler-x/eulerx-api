@@ -126,6 +126,67 @@ CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "label": "AI Models (comma-separated)",
         "description": "OpenRouter model IDs used for signal analysis consensus.",
     },
+    # ── Trend Filter ──────────────────────────────────────────
+    "market_trend": {
+        "value": "neutral",
+        "type": "str",
+        "category": "Trend Filter",
+        "label": "Market Trend",
+        "description": (
+            "Active market bias: 'bullish' (only BUY allowed), "
+            "'bearish' (only SELL allowed), or 'neutral' (no filter)."
+        ),
+    },
+    "trend_filter_enabled": {
+        "value": 1,
+        "type": "int",
+        "category": "Trend Filter",
+        "label": "Trend Filter Enabled",
+        "description": (
+            "Master switch for the trend filter. "
+            "Set to 0 to disable trend-based signal filtering entirely."
+        ),
+    },
+    "trend_with_confidence_boost": {
+        "value": 0.0,
+        "type": "float",
+        "category": "Trend Filter",
+        "label": "With-Trend Confidence Boost",
+        "description": (
+            "Confidence boost added to signals that align with the active trend "
+            "(e.g. SELL signals in a bearish market get +X confidence)."
+        ),
+    },
+    "trend_counter_confidence_penalty": {
+        "value": 0.10,
+        "type": "float",
+        "category": "Trend Filter",
+        "label": "Counter-Trend Confidence Penalty",
+        "description": (
+            "Confidence penalty applied to signals that go against the active trend "
+            "before the rejection check."
+        ),
+    },
+    "trend_counter_allow_high_confidence": {
+        "value": 0,
+        "type": "int",
+        "category": "Trend Filter",
+        "label": "Allow High-Confidence Counter-Trend",
+        "description": (
+            "If 1, allows counter-trend signals that exceed the counter-trend "
+            "minimum confidence threshold instead of blocking them outright."
+        ),
+    },
+    "trend_counter_min_confidence": {
+        "value": 0.95,
+        "type": "float",
+        "category": "Trend Filter",
+        "label": "Counter-Trend Min Confidence",
+        "description": (
+            "Minimum confidence required for a counter-trend trade to be allowed "
+            "(only effective when high-confidence override is enabled)."
+        ),
+    },
 }
 
 

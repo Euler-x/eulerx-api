@@ -28,6 +28,7 @@ from app.routers import (
     strategies,
     support,
     telegram,
+    trading,
     transactions,
     transparency,
     wallet,
@@ -249,6 +250,7 @@ app.include_router(learning.router, prefix=prefix)
 app.include_router(worker_health.router, prefix=prefix)
 app.include_router(chat.router, prefix=prefix)
 app.include_router(positions_ws.router, prefix=prefix)
+app.include_router(trading.router, prefix=prefix)
 
 
 # ---------------------------------------------------------------------------
