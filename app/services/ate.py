@@ -501,6 +501,61 @@ class ATEService:
             await db.flush()
             return execution
 
+        # ── Trend Filter Gate ────────────────────────────────────────
+        trend_filter_on = int(await get_config("trend_filter_enabled", 1, db))
+        market_trend = (
+            str(await get_config("market_trend", "neutral", db)).lower().strip()
+        )
+
+        if trend_filter_on and market_trend in ("bullish", "bearish"):
+            is_counter_trend = (
+                market_trend == "bearish" and signal.direction == SignalDirection.BUY
+            ) or (
+                market_trend == "bullish" and signal.direction == SignalDirection.SELL
+            )
+
+            if is_counter_trend:
+                # Read advanced override settings
+                allow_override = int(
+                    await get_config("trend_counter_allow_high_confidence", 0, db)
+                )
+                counter_min = float(
+                    await get_config("trend_counter_min_confidence", 0.95, db)
+                )
+                penalty = float(
+                    await get_config("trend_counter_confidence_penalty", 0.10, db)
+                )
+
+                adjusted_confidence = float(signal.confidence) - penalty
+
+                if allow_override and adjusted_confidence >= counter_min:
+                    logger.info(
+                        "Signal %s is counter-trend (%s in %s market) but "
+                        "confidence %.2f (adjusted %.2f) exceeds override "
+                        "threshold %.2f — allowing",
+                        signal.id,
+                        signal.direction.value,
+                        market_trend,
+                        float(signal.confidence),
+                        adjusted_confidence,
+                        counter_min,
+                    )
+                else:
+                    trend_label = "BEAR 🐻" if market_trend == "bearish" else "BULL 🐂"
+                    allowed_dir = "SELL" if market_trend == "bearish" else "BUY"
+                    reason = (
+                        f"{signal.direction.value.upper()} signal rejected: "
+                        f"{trend_label} trend active — only {allowed_dir} "
+                        f"trades allowed"
+                    )
+                    logger.info("Signal %s rejected: %s", signal.id, reason)
+                    execution = self._create_failed_execution(
+                        signal, user, strategy, reason
+                    )
+                    db.add(execution)
+                    await db.flush()
+                    return execution
+
         # ── Position sizing with real balance + szDecimals ───────────
         entry_price = float(signal.entry_price)
         import math as _math
