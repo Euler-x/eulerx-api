@@ -40,7 +40,6 @@ Key Levels:
 Lower Timeframe Entry Data (15m + 5m):
 {ltf_entry_summary}
 
-Full Context: {context}
 
 Respond ONLY with valid JSON (no markdown, no explanation):
 {{
