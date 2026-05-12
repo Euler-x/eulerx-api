@@ -1,7 +1,8 @@
 import uuid
+from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,11 +23,35 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 @router.get("/overview", response_model=AnalyticsOverviewResponse)
 async def get_analytics_overview(
     days: int = Query(default=30, ge=1, le=365),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     exchange: Optional[str] = Query(default=None),
     perms: UserPermissions = RequireVerified,
     db: AsyncSession = Depends(get_db),
 ):
-    data = await AnalyticsService.compute(db, perms.id, days=days, exchange=exchange)
+    if (start_date is None) ^ (end_date is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Both start_date and end_date are required for custom ranges.",
+        )
+    if start_date and end_date:
+        if start_date > end_date:
+            raise HTTPException(
+                status_code=400, detail="start_date must be <= end_date."
+            )
+        if (end_date - start_date).days > 365:
+            raise HTTPException(
+                status_code=400, detail="Custom range cannot exceed 365 days."
+            )
+
+    data = await AnalyticsService.compute(
+        db,
+        perms.id,
+        days=days,
+        exchange=exchange,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return AnalyticsOverviewResponse(**data)
 
 
@@ -46,8 +71,6 @@ async def get_strategy_analytics(
     )
     strategy = result.scalar_one_or_none()
     if strategy is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Strategy not found")
 
     data = await AnalyticsService.compute(
@@ -118,8 +141,6 @@ async def get_system_performance(
     including total trading volume, profit/loss %, and daily breakdown.
     No user-level data is exposed.
     """
-    from fastapi import HTTPException
-
     client_ip = request.client.host if request.client else "unknown"
     if not _check_rate_limit(client_ip):
         raise HTTPException(
