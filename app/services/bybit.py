@@ -762,6 +762,11 @@ class BybitService:
         stop_loss: float | None = None,
     ) -> dict:
         """Place an order on Bybit."""
+        tick_size = await self.get_tick_size(symbol)
+        if take_profit is not None:
+            take_profit = self.round_to_tick(take_profit, tick_size)
+        if stop_loss is not None:
+            stop_loss = self.round_to_tick(stop_loss, tick_size)
 
         def _place():
             session = self._get_session(api_key, api_secret)

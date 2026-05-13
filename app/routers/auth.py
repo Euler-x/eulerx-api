@@ -47,6 +47,52 @@ from app.utils.security import (
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
+async def _generate_unique_ambassador_code(db: AsyncSession) -> str:
+    """Generate a referral code that is not already assigned."""
+    for _ in range(10):
+        code = generate_referral_code()
+        existing = await db.execute(
+            select(Ambassador.id).where(Ambassador.referral_code == code)
+        )
+        if existing.scalar_one_or_none() is None:
+            return code
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Could not generate a unique referral code. Please try again.",
+    )
+
+
+async def _find_referrer_by_code(
+    db: AsyncSession, referral_code: str | None
+) -> Ambassador | None:
+    code = (referral_code or "").strip().upper()
+    if not code:
+        return None
+    result = await db.execute(
+        select(Ambassador).where(Ambassador.referral_code == code)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _attach_referral_ambassador(
+    db: AsyncSession,
+    user: User,
+    referrer: Ambassador | None,
+) -> Ambassador | None:
+    if referrer is None:
+        return None
+    ambassador = Ambassador(
+        user_id=user.id,
+        referral_code=await _generate_unique_ambassador_code(db),
+        referred_by=referrer.id,
+    )
+    db.add(ambassador)
+    referrer.total_referrals = (referrer.total_referrals or 0) + 1
+    referrer.team_size = (referrer.team_size or 0) + 1
+    await db.flush()
+    return ambassador
+
+
 # ── Email/Password Authentication ────────────────────────────────
 
 
@@ -77,44 +123,39 @@ async def register(
     db.add(user)
     await db.flush()
 
-    # Handle referral
+    # Handle referral. Codes are normalized so /ref/IPKW96GV and a manually
+    # typed "ipkw96gv" resolve identically.
     referrer_user: User | None = None
-    if request.referral_code:
-        ref_result = await db.execute(
-            select(Ambassador).where(Ambassador.referral_code == request.referral_code)
-        )
-        referrer = ref_result.scalar_one_or_none()
-        if referrer:
-            ambassador = Ambassador(
-                user_id=user.id,
-                referral_code=generate_referral_code(),
-                referred_by=referrer.id,
-            )
-            db.add(ambassador)
-            referrer.total_referrals += 1
-            referrer.team_size += 1
-            ref_user_result = await db.execute(
-                select(User).where(User.id == referrer.user_id)
-            )
-            referrer_user = ref_user_result.scalar_one_or_none()
+    referrer = await _find_referrer_by_code(db, request.referral_code)
+    if referrer:
+        await _attach_referral_ambassador(db, user, referrer)
+        ref_user_result = await db.execute(select(User).where(User.id == referrer.user_id))
+        referrer_user = ref_user_result.scalar_one_or_none()
 
     notification_service = NotificationService()
 
     # Notify referrer of new signup
     if referrer_user:
-        await notification_service.send_referral_signup_email(
-            ambassador_user=referrer_user,
-            referred_email=request.email,
-        )
+        try:
+            await notification_service.send_referral_signup_email(
+                ambassador_user=referrer_user,
+                referred_email=request.email,
+            )
+        except Exception:
+            # Notifications must never roll back a successful signup.
+            pass
 
     # Admin alert for new signup
-    await notification_service.send_admin_alert(
-        telegram_templates.admin_new_signup(
-            identifier=request.email,
-            method="Email/Password",
-            referral=referrer_user is not None,
+    try:
+        await notification_service.send_admin_alert(
+            telegram_templates.admin_new_signup(
+                identifier=request.email,
+                method="Email/Password",
+                referral=referrer_user is not None,
+            )
         )
-    )
+    except Exception:
+        pass
 
     # Send verification email
     await notification_service.send_verification_email(db, user)
@@ -281,42 +322,35 @@ async def generate_wallet(
     await db.flush()
 
     # Handle referral
-    if request.referral_code:
-        ref_result = await db.execute(
-            select(Ambassador).where(Ambassador.referral_code == request.referral_code)
+    referrer = await _find_referrer_by_code(db, request.referral_code)
+    if referrer:
+        await _attach_referral_ambassador(db, user, referrer)
+        referrer_user_result = await db.execute(
+            select(User).where(User.id == referrer.user_id)
         )
-        referrer = ref_result.scalar_one_or_none()
-        if referrer:
-            ambassador = Ambassador(
-                user_id=user.id,
-                referral_code=generate_referral_code(),
-                referred_by=referrer.id,
-            )
-            db.add(ambassador)
-            referrer.total_referrals += 1
-            referrer.team_size += 1
-
-            # Notify ambassador of new referral
-            referrer_user_result = await db.execute(
-                select(User).where(User.id == referrer.user_id)
-            )
-            referrer_user = referrer_user_result.scalar_one_or_none()
-            if referrer_user:
+        referrer_user = referrer_user_result.scalar_one_or_none()
+        if referrer_user:
+            try:
                 notification_service = NotificationService()
                 await notification_service.send_referral_signup(
                     ambassador_user=referrer_user,
                     referred_wallet_hash=wallet_data["address_hash"],
                 )
+            except Exception:
+                pass
 
     # Admin alert for new wallet signup
     ns = NotificationService()
-    await ns.send_admin_alert(
-        telegram_templates.admin_new_signup(
-            identifier=wallet_data["address"][:10] + "...",
-            method="Generated Wallet",
-            referral=bool(request.referral_code),
+    try:
+        await ns.send_admin_alert(
+            telegram_templates.admin_new_signup(
+                identifier=wallet_data["address"][:10] + "...",
+                method="Generated Wallet",
+                referral=referrer is not None,
+            )
         )
-    )
+    except Exception:
+        pass
 
     access_token = create_access_token(str(user.id), user.is_admin)
     refresh_token = create_refresh_token(str(user.id))

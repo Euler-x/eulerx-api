@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.models.binance_signal import BinanceSignal
 from app.models.bybit_signal import BybitSignal
 from app.models.enums import ExecutionStatus, SignalDirection
 from app.models.execution import Execution
@@ -31,8 +32,10 @@ class ExecutionSyncService:
         return value
 
     @classmethod
-    def get_signal(cls, execution: Execution) -> Signal | BybitSignal | None:
-        return execution.signal or execution.bybit_signal
+    def get_signal(
+        cls, execution: Execution
+    ) -> Signal | BybitSignal | BinanceSignal | None:
+        return execution.signal or execution.bybit_signal or execution.binance_signal
 
     @classmethod
     def get_execution_opened_at(cls, execution: Execution) -> datetime:

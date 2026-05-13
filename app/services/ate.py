@@ -128,6 +128,109 @@ class ATEService:
 
         return quantity
 
+    async def _get_exchange_reference_price(
+        self,
+        signal: Signal | BybitSignal | BinanceSignal,
+        user: User,
+        entry_price: float,
+    ) -> float:
+        """Best current price for validating TP/SL trigger placement."""
+        try:
+            if isinstance(signal, BybitSignal):
+                ticker = await self._get_user_bybit_service(user).get_ticker(
+                    signal.symbol
+                )
+                if ticker:
+                    bid = float(ticker.get("bid1Price") or 0)
+                    ask = float(ticker.get("ask1Price") or 0)
+                    if bid > 0 and ask > 0:
+                        return (bid + ask) / 2
+                    last = float(ticker.get("lastPrice") or 0)
+                    if last > 0:
+                        return last
+            elif isinstance(signal, BinanceSignal):
+                ticker = await self._get_user_binance_service(user).get_ticker(
+                    signal.symbol
+                )
+                if ticker:
+                    bid = float(ticker.get("bidPrice") or 0)
+                    ask = float(ticker.get("askPrice") or 0)
+                    if bid > 0 and ask > 0:
+                        return (bid + ask) / 2
+                    last = float(ticker.get("lastPrice") or 0)
+                    if last > 0:
+                        return last
+            else:
+                mids = await self.hyperliquid.get_all_mids()
+                mid = float(mids.get(signal.symbol, 0))
+                if mid > 0:
+                    return mid
+        except Exception as e:
+            logger.warning(
+                "Failed to fetch current price for %s TP/SL validation: %s",
+                signal.symbol,
+                e,
+            )
+        return entry_price
+
+    @staticmethod
+    def _validate_tpsl_prices(
+        signal: Signal | BybitSignal | BinanceSignal,
+        reference_price: float,
+    ) -> tuple[bool, str]:
+        """Ensure TP/SL are on the non-triggering side of the current market."""
+        if not signal.take_profit or not signal.stop_loss:
+            return False, "Rejected: missing take_profit or stop_loss"
+
+        tp_price = float(signal.take_profit)
+        sl_price = float(signal.stop_loss)
+
+        if reference_price <= 0 or tp_price <= 0 or sl_price <= 0:
+            return False, "Rejected: invalid entry, take_profit, or stop_loss price"
+
+        if signal.direction == SignalDirection.BUY:
+            if tp_price <= reference_price:
+                reason = (
+                    f"Rejected: BUY take_profit ({tp_price}) must be above "
+                    f"current price ({reference_price})"
+                )
+                return (
+                    False,
+                    reason,
+                )
+            if sl_price >= reference_price:
+                reason = (
+                    f"Rejected: BUY stop_loss ({sl_price}) must be below "
+                    f"current price ({reference_price})"
+                )
+                return (
+                    False,
+                    reason,
+                )
+        elif signal.direction == SignalDirection.SELL:
+            if tp_price >= reference_price:
+                reason = (
+                    f"Rejected: SELL take_profit ({tp_price}) must be below "
+                    f"current price ({reference_price})"
+                )
+                return (
+                    False,
+                    reason,
+                )
+            if sl_price <= reference_price:
+                reason = (
+                    f"Rejected: SELL stop_loss ({sl_price}) must be above "
+                    f"current price ({reference_price})"
+                )
+                return (
+                    False,
+                    reason,
+                )
+        else:
+            return False, "Rejected: HOLD signals cannot be executed"
+
+        return True, "TP/SL prices are valid"
+
     def _get_bybit_keys(self, user: User) -> tuple[str, str] | None:
         """Decrypt and return (api_key, api_secret) for a Bybit-configured user."""
         if not user.bybit_configured:
@@ -656,6 +759,31 @@ class ATEService:
             return execution
 
         is_buy = signal.direction == SignalDirection.BUY
+
+        reference_price = await self._get_exchange_reference_price(
+            signal, user, entry_price
+        )
+        tpsl_valid, tpsl_reason = self._validate_tpsl_prices(
+            signal, reference_price
+        )
+        if not tpsl_valid:
+            logger.error(
+                "SAFETY BLOCK: Signal %s has invalid TP/SL for %s at reference price %.8f: %s",
+                signal.id,
+                signal.symbol,
+                reference_price,
+                tpsl_reason,
+            )
+            execution = self._create_failed_execution(
+                signal,
+                user,
+                strategy,
+                tpsl_reason,
+                entry_price,
+            )
+            db.add(execution)
+            await db.flush()
+            return execution
 
         # ── Option B: BUY symbol blocklist ───────────────────────────
         if is_buy:

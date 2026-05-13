@@ -70,6 +70,7 @@ class Ambassador(Base, TimestampMixin):
 
     # ── Legacy / summary fields ──────────────────────────────────────
     total_referrals: Mapped[int] = mapped_column(Integer, default=0)
+    team_size: Mapped[int] = mapped_column(Integer, default=0)
     rewards_earned: Mapped[float] = mapped_column(
         Numeric(precision=18, scale=8), default=0.0
     )

@@ -296,3 +296,37 @@ async def test_monitor_positions_no_trigger(setup_db, mock_hyperliquid_api):
 
     sol_results = [r for r in results if r["symbol"] == "SOL"]
     assert len(sol_results) == 0
+
+
+def test_validate_tpsl_prices_blocks_immediate_buy_trigger():
+    signal = Signal(
+        symbol="BTC",
+        direction=SignalDirection.BUY,
+        confidence=0.9,
+        entry_price=Decimal("50000"),
+        take_profit=Decimal("49900"),
+        stop_loss=Decimal("48000"),
+        status=SignalStatus.NEW,
+    )
+
+    valid, reason = ATEService._validate_tpsl_prices(signal, 50000)
+
+    assert valid is False
+    assert "BUY take_profit" in reason
+
+
+def test_validate_tpsl_prices_blocks_immediate_sell_trigger():
+    signal = Signal(
+        symbol="ETH",
+        direction=SignalDirection.SELL,
+        confidence=0.9,
+        entry_price=Decimal("3000"),
+        take_profit=Decimal("2800"),
+        stop_loss=Decimal("2900"),
+        status=SignalStatus.NEW,
+    )
+
+    valid, reason = ATEService._validate_tpsl_prices(signal, 3000)
+
+    assert valid is False
+    assert "SELL stop_loss" in reason
