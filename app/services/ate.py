@@ -763,9 +763,7 @@ class ATEService:
         reference_price = await self._get_exchange_reference_price(
             signal, user, entry_price
         )
-        tpsl_valid, tpsl_reason = self._validate_tpsl_prices(
-            signal, reference_price
-        )
+        tpsl_valid, tpsl_reason = self._validate_tpsl_prices(signal, reference_price)
         if not tpsl_valid:
             logger.error(
                 "SAFETY BLOCK: Signal %s has invalid TP/SL for %s at reference price %.8f: %s",

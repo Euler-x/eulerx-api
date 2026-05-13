@@ -88,7 +88,9 @@ async def _attach_referral_ambassador(
     )
     db.add(ambassador)
     referrer.total_referrals = (referrer.total_referrals or 0) + 1
-    referrer.team_size = (referrer.team_size or 0) + 1
+    referrer.team_size = (
+        (referrer.team_size or 0) + 1
+    )  # Increment team size for direct referrals. We can later expand this to count indirect referrals if desired.
     await db.flush()
     return ambassador
 
@@ -129,7 +131,9 @@ async def register(
     referrer = await _find_referrer_by_code(db, request.referral_code)
     if referrer:
         await _attach_referral_ambassador(db, user, referrer)
-        ref_user_result = await db.execute(select(User).where(User.id == referrer.user_id))
+        ref_user_result = await db.execute(
+            select(User).where(User.id == referrer.user_id)
+        )
         referrer_user = ref_user_result.scalar_one_or_none()
 
     notification_service = NotificationService()
