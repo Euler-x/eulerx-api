@@ -19,6 +19,9 @@ from app.models.support import SupportMessage, SupportTicket  # noqa: F401
 from app.models.transaction import Transaction  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
+from app.models.binance_signal import BinanceSignal  # noqa: F401
+from app.models.bybit_signal import BybitSignal  # noqa: F401
+import app.models.ambassador_programs  # noqa: F401
 
 config = context.config
 settings = get_settings()

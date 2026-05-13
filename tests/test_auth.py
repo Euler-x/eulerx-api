@@ -1,7 +1,7 @@
 """Test authentication endpoints."""
 
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -83,7 +83,7 @@ async def test_refresh_token(client, test_user):
 
 @pytest.mark.asyncio
 async def test_register_with_referral_code_creates_referred_ambassador(
-    client, setup_db, mock_email_api
+    client, setup_db
 ):
     """POST /auth/register with a referral code attributes the new user."""
     referrer_user_id = uuid.uuid4()
@@ -106,15 +106,19 @@ async def test_register_with_referral_code_creates_referred_ambassador(
         )
         await session.commit()
 
-    response = await client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": f"referred-{uuid.uuid4().hex[:8]}@example.com",
-            "password": "strong-password",
-            "referral_code": referral_code.lower(),
-            "cf_turnstile_token": "",
-        },
-    )
+    with patch(
+        "app.services.notifications.NotificationService.send_email",
+        new_callable=AsyncMock,
+    ):
+        response = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"referred-{uuid.uuid4().hex[:8]}@example.com",
+                "password": "strong-password",
+                "referral_code": referral_code.lower(),
+                "cf_turnstile_token": "",
+            },
+        )
 
     assert response.status_code == 200
 

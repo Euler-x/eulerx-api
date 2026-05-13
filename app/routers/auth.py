@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
@@ -69,7 +69,7 @@ async def _find_referrer_by_code(
     if not code:
         return None
     result = await db.execute(
-        select(Ambassador).where(Ambassador.referral_code == code)
+        select(Ambassador).where(func.upper(Ambassador.referral_code) == code)
     )
     return result.scalar_one_or_none()
 
