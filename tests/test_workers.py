@@ -23,6 +23,7 @@ from app.models.enums import (
 )
 from app.models.admin_config import AdminConfig
 from app.models.billing import Plan, Subscription
+from app.models.bybit_signal import BybitSignal
 from app.models.execution import Execution
 from app.models.signal import Signal
 from app.models.strategy import Strategy
@@ -876,3 +877,129 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
     assert execution is not None
     assert execution.status == ExecutionStatus.FILLED
     assert execution.direction == SignalDirection.BUY
+
+
+@pytest.mark.asyncio
+async def test_execute_signal_bybit_uses_post_fill_tpsl_flow(setup_db):
+    """Bybit entries should size against market caps and attach TP/SL after fill."""
+    from sqlalchemy import select
+
+    from app.services.ate import ATEService, ate_rate_limiter
+
+    ate_rate_limiter._requests.clear()
+
+    user_id = uuid.uuid4()
+    strategy_id = uuid.uuid4()
+    signal_id = uuid.uuid4()
+
+    async with TestSessionFactory() as session:
+        user = User(
+            id=user_id,
+            wallet_address_hash="bybit" * 12 + "abcd",
+            email="bybit-exec@test.com",
+            email_verified=True,
+            bybit_api_key_encrypted=encrypt_private_key("bybit-key"),
+            bybit_api_secret_encrypted=encrypt_private_key("bybit-secret"),
+            bybit_testnet=True,
+        )
+        session.add(user)
+
+        strategy = Strategy(
+            id=strategy_id,
+            user_id=user_id,
+            name="Bybit Execute Test",
+            strategy_type=StrategyType.MODERATE,
+            risk_profile=RiskProfile.MEDIUM,
+            allocation_pct=50.0,
+            is_active=True,
+            max_positions=5,
+            leverage_limit=2.0,
+        )
+        session.add(strategy)
+
+        signal = BybitSignal(
+            id=signal_id,
+            symbol="QUSDT",
+            direction=SignalDirection.BUY,
+            confidence=0.9,
+            entry_price=Decimal("100"),
+            take_profit=Decimal("105"),
+            stop_loss=Decimal("95"),
+            status=SignalStatus.NEW,
+        )
+        session.add(signal)
+        await session.commit()
+
+    async with TestSessionFactory() as session:
+        sig_result = await session.execute(
+            select(BybitSignal).where(BybitSignal.id == signal_id)
+        )
+        signal = sig_result.scalar_one()
+
+        strat_result = await session.execute(
+            select(Strategy).where(Strategy.id == strategy_id)
+        )
+        strategy = strat_result.scalar_one()
+
+        user_result = await session.execute(select(User).where(User.id == user_id))
+        user = user_result.scalar_one()
+
+        ate = ATEService()
+        mock_bybit = MagicMock()
+        mock_bybit.get_ticker = AsyncMock(
+            return_value={"bid1Price": "100.0", "ask1Price": "100.2"}
+        )
+        mock_bybit.get_lot_size_info = AsyncMock(
+            return_value={
+                "qty_step": 0.1,
+                "min_order_qty": 0.1,
+                "max_order_qty": 250000.0,
+                "max_limit_order_qty": 1250000.0,
+                "max_market_order_qty": 250000.0,
+            }
+        )
+        mock_bybit.update_leverage = AsyncMock(return_value={"success": True})
+        mock_bybit.place_order = AsyncMock(
+            return_value={
+                "success": True,
+                "oid": "bybit-order-1",
+                "tx_hash": "bybit-order-1",
+            }
+        )
+        mock_bybit.wait_for_order_fill = AsyncMock(
+            return_value={"avg_price": 100.15, "executed_qty": 5.0}
+        )
+        mock_bybit.place_tp_sl_orders = AsyncMock(return_value={"success": True})
+
+        async def fake_get_config(_key, default, _db=None):
+            return default
+
+        with (
+            patch(
+                "app.services.dynamic_config.get_config",
+                new=AsyncMock(side_effect=fake_get_config),
+            ),
+            patch(
+                "app.services.ate.NotificationService.send_trade_executed",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.services.ate.VerificationService.log_execution_transaction",
+                new_callable=AsyncMock,
+            ),
+            patch.object(ate, "_get_user_bybit_service", return_value=mock_bybit),
+            patch.object(
+                ate, "_get_bybit_balance", new_callable=AsyncMock, return_value=5000.0
+            ),
+        ):
+            execution = await ate.execute_signal(session, signal, strategy, user)
+            await session.commit()
+
+    assert execution is not None
+    assert execution.status == ExecutionStatus.FILLED
+    assert float(execution.entry_price) == pytest.approx(100.15)
+    assert float(execution.quantity) == pytest.approx(5.0)
+    assert mock_bybit.get_lot_size_info.await_args.kwargs["order_type"] == "market"
+    assert "take_profit" not in mock_bybit.place_order.await_args.kwargs
+    assert "stop_loss" not in mock_bybit.place_order.await_args.kwargs
+    assert mock_bybit.place_tp_sl_orders.await_count == 1

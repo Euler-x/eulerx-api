@@ -11,6 +11,7 @@ class ExecutionResponse(BaseModel):
     id: uuid.UUID
     signal_id: Optional[uuid.UUID] = None
     bybit_signal_id: Optional[uuid.UUID] = None
+    binance_signal_id: Optional[uuid.UUID] = None
     user_id: uuid.UUID
     strategy_id: uuid.UUID
     order_type: OrderType

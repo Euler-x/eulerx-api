@@ -16,6 +16,7 @@ from app.models.schemas.execution import (
     ExecutionResponse,
     ExecutionVerifyResponse,
 )
+from app.services.binance import BinanceService
 from app.services.bybit import BybitService
 from app.services.execution_sync import ExecutionSyncService
 from app.services.hyperliquid import HyperliquidService
@@ -144,6 +145,7 @@ async def close_execution(
         .options(
             selectinload(Execution.signal),
             selectinload(Execution.bybit_signal),
+            selectinload(Execution.binance_signal),
             selectinload(Execution.user),
             selectinload(Execution.strategy),
         )
@@ -163,7 +165,7 @@ async def close_execution(
         )
 
     user = execution.user
-    signal = execution.signal or execution.bybit_signal
+    signal = execution.signal or execution.bybit_signal or execution.binance_signal
     if not signal:
         raise HTTPException(
             status_code=400, detail="Execution has no associated signal."
@@ -266,7 +268,134 @@ async def close_execution(
                 }
 
     # ── Bybit ────────────────────────────────────────────────────────────────
-    else:
+    elif exchange_name == Exchange.BINANCE:
+        if not user.binance_configured:
+            raise HTTPException(status_code=400, detail="No Binance account connected.")
+
+        try:
+            api_key = decrypt_private_key(user.binance_api_key_encrypted)
+            api_secret = decrypt_private_key(user.binance_api_secret_encrypted)
+        except Exception:
+            raise HTTPException(
+                status_code=500, detail="Failed to decrypt Binance keys."
+            )
+
+        binance = BinanceService(testnet=getattr(user, "binance_testnet", False))
+        hedge_mode = await binance.get_position_mode(api_key, api_secret)
+        position_side = ("LONG" if is_buy else "SHORT") if hedge_mode else "BOTH"
+        positions = await binance.get_user_positions(api_key, api_secret)
+
+        if positions.get(symbol) is not None:
+            close_result = await binance.close_position(
+                api_key=api_key,
+                api_secret=api_secret,
+                symbol=symbol,
+                size=quantity,
+                is_buy=is_buy,
+                position_side=position_side,
+            )
+            if not close_result.get("success"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Exchange rejected close order: {close_result.get('error', 'unknown error')}",
+                )
+            logger.info("Manual close placed on Binance for execution %s", execution_id)
+        else:
+            already_closed_on_exchange = True
+            logger.info(
+                "Execution %s already closed on Binance â€” syncing record",
+                execution_id,
+            )
+
+        close_data = await ExecutionSyncService.wait_for_binance_close(
+            binance,
+            execution,
+            api_key,
+            api_secret,
+            position_side=position_side,
+            attempts=8,
+            delay_seconds=1.5,
+        )
+
+        if close_data is None:
+            try:
+                opened_at_ms = int(
+                    ExecutionSyncService.get_execution_opened_at(execution).timestamp()
+                    * 1000
+                )
+                close_data = await binance.get_close_trade_summary(
+                    api_key,
+                    api_secret,
+                    symbol,
+                    start_time_ms=opened_at_ms,
+                    expected_close_side="SELL" if is_buy else "BUY",
+                    expected_position_side=position_side,
+                    entry_order_id=execution.exchange_order_id,
+                    expected_quantity=quantity,
+                    limit=100,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch Binance close trades for execution %s: %s",
+                    execution_id,
+                    e,
+                )
+
+        if close_data is None:
+            try:
+                opened_at_ms = int(
+                    ExecutionSyncService.get_execution_opened_at(execution).timestamp()
+                    * 1000
+                )
+                pnl_data = await binance.get_closed_pnl(
+                    api_key, api_secret, symbol, start_time_ms=opened_at_ms, limit=20
+                )
+                if pnl_data:
+                    close_data = pnl_data
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch Binance closed PnL for execution %s: %s",
+                    execution_id,
+                    e,
+                )
+
+        if close_data is None:
+            try:
+                ticker = await binance.get_ticker(symbol)
+                bid = float(ticker.get("bidPrice") or 0) if ticker else 0.0
+                ask = float(ticker.get("askPrice") or 0) if ticker else 0.0
+                mid = (
+                    (bid + ask) / 2
+                    if bid > 0 and ask > 0
+                    else float(ticker.get("lastPrice") or 0)
+                    if ticker
+                    else 0.0
+                )
+            except Exception:
+                mid = 0.0
+
+            if mid > 0:
+                entry_price_f = float(execution.entry_price)
+                pnl = (
+                    (mid - entry_price_f) * quantity
+                    if is_buy
+                    else (entry_price_f - mid) * quantity
+                )
+                close_data = {
+                    "exit_price": mid,
+                    "pnl": pnl,
+                    "close_hash": None,
+                    "closed_at": None,
+                }
+            else:
+                close_data = {
+                    "exit_price": float(execution.entry_price),
+                    "pnl": 0.0,
+                    "close_hash": None,
+                    "closed_at": None,
+                }
+
+    elif exchange_name == Exchange.BYBIT:
         if not user.bybit_configured:
             raise HTTPException(status_code=400, detail="No Bybit account connected.")
 
@@ -276,7 +405,7 @@ async def close_execution(
         except Exception:
             raise HTTPException(status_code=500, detail="Failed to decrypt Bybit keys.")
 
-        bybit = BybitService()
+        bybit = BybitService(testnet=getattr(user, "bybit_testnet", False))
         positions = await bybit.get_user_positions(api_key, api_secret)
 
         if positions.get(symbol) is not None:
@@ -328,6 +457,35 @@ async def close_execution(
                     e,
                 )
 
+        if close_data is None:
+            try:
+                ticker = await bybit.get_ticker(symbol)
+                bid = float(ticker.get("bid1Price") or 0) if ticker else 0.0
+                ask = float(ticker.get("ask1Price") or 0) if ticker else 0.0
+                mid = (
+                    (bid + ask) / 2
+                    if bid > 0 and ask > 0
+                    else float(ticker.get("lastPrice") or 0)
+                    if ticker
+                    else 0.0
+                )
+            except Exception:
+                mid = 0.0
+
+            if mid > 0:
+                entry_price_f = float(execution.entry_price)
+                pnl = (
+                    (mid - entry_price_f) * quantity
+                    if is_buy
+                    else (entry_price_f - mid) * quantity
+                )
+                close_data = {
+                    "exit_price": mid,
+                    "pnl": pnl,
+                    "close_hash": None,
+                    "closed_at": None,
+                }
+
         # Last resort
         if close_data is None:
             close_data = {
@@ -338,6 +496,12 @@ async def close_execution(
             }
 
     # ── Persist via centralized sync service ─────────────────────────────────
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported exchange for manual close: {exchange_name.value}",
+        )
+
     exit_price = close_data.get("exit_price", float(execution.entry_price))
     closed_pnl = close_data.get("pnl", close_data.get("closed_pnl", 0.0))
     close_hash = close_data.get("close_hash")

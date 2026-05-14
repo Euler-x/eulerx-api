@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -665,7 +666,9 @@ class ATEService:
 
         if is_binance:
             user_binance = self._get_user_binance_service(user)
-            lot_info = await user_binance.get_lot_size_info(signal.symbol)
+            lot_info = await user_binance.get_lot_size_info(
+                signal.symbol, order_type="market"
+            )
             qty_step = lot_info["qty_step"]
             max_order_qty = lot_info["max_order_qty"]
             sz_decimals = (
@@ -673,7 +676,9 @@ class ATEService:
             )
         elif is_bybit:
             user_bybit = self._get_user_bybit_service(user)
-            lot_info = await user_bybit.get_lot_size_info(signal.symbol)
+            lot_info = await user_bybit.get_lot_size_info(
+                signal.symbol, order_type="market"
+            )
             qty_step = lot_info["qty_step"]
             max_order_qty = lot_info["max_order_qty"]
             sz_decimals = (
@@ -688,9 +693,11 @@ class ATEService:
 
         # Cap at exchange's max order quantity for this symbol.
         if quantity > max_order_qty and max_order_qty < float("inf"):
+            exchange_label = "Binance" if is_binance else "Bybit"
             logger.info(
-                "Calculated qty %s exceeds Bybit max_order_qty %s for %s — capping",
+                "Calculated qty %s exceeds %s max_order_qty %s for %s — capping",
                 quantity,
+                exchange_label,
                 max_order_qty,
                 signal.symbol if hasattr(signal, "symbol") else "unknown",
             )
@@ -886,10 +893,10 @@ class ATEService:
                 strategy.id,
             )
 
-            # Place market order with inline TP/SL for immediate protection.
-            # set_trading_stop is also called post-fill as a confirmation layer
-            # to ensure TP/SL is active even if the inline params were silently
-            # ignored (e.g. price already past target at fill time).
+            # Place the entry first, then attach TP/SL via set_trading_stop.
+            # Bybit validates inline TP/SL against the current market at order
+            # creation time, so stale signal targets can reject otherwise-valid
+            # market entries.
             order_result = await user_bybit.place_order(
                 api_key=api_key,
                 api_secret=api_secret,
@@ -897,14 +904,36 @@ class ATEService:
                 is_buy=is_buy,
                 size=quantity,
                 order_type="market",
-                take_profit=float(signal.take_profit) if signal.take_profit else None,
-                stop_loss=float(signal.stop_loss) if signal.stop_loss else None,
             )
 
             if order_result.get("success"):
                 execution.status = ExecutionStatus.FILLED
                 execution.exchange_order_id = str(order_result.get("oid", ""))
                 execution.tx_hash = str(order_result.get("tx_hash", ""))
+                fill_summary = await user_bybit.wait_for_order_fill(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    symbol=signal.symbol,
+                    order_id=execution.exchange_order_id,
+                    attempts=6,
+                    delay_seconds=1.0,
+                )
+                avg_price = (
+                    float(fill_summary.get("avg_price", 0) or 0)
+                    if fill_summary
+                    else 0.0
+                )
+                executed_qty = (
+                    float(fill_summary.get("executed_qty", 0) or 0)
+                    if fill_summary
+                    else 0.0
+                )
+                if avg_price > 0:
+                    execution.entry_price = avg_price
+                    entry_price = avg_price
+                if executed_qty > 0:
+                    execution.quantity = executed_qty
+                    quantity = executed_qty
                 execution.executed_at = utc_now()
                 logger.info(
                     "Bybit order FILLED for signal %s: order_id=%s",
@@ -991,6 +1020,14 @@ class ATEService:
                 execution.status = ExecutionStatus.FILLED
                 execution.exchange_order_id = str(order_result.get("oid", ""))
                 execution.tx_hash = str(order_result.get("tx_hash", ""))
+                avg_price = float(order_result.get("avg_price", 0) or 0)
+                executed_qty = float(order_result.get("executed_qty", 0) or 0)
+                if avg_price > 0:
+                    execution.entry_price = avg_price
+                    entry_price = avg_price
+                if executed_qty > 0:
+                    execution.quantity = executed_qty
+                    quantity = executed_qty
                 execution.executed_at = utc_now()
                 logger.info(
                     "Binance order FILLED for signal %s: order_id=%s",
@@ -1192,7 +1229,7 @@ class ATEService:
                             e,
                         )
             elif is_binance:
-                # Binance: place TP and SL via /fapi/v1/order STOP_MARKET / TAKE_PROFIT_MARKET
+                # Binance: place TP and SL via /fapi/v1/algoOrder conditional orders
                 # Reuse api_key/api_secret and position_side from order placement above.
                 if tp_price is not None and sl_price is not None:
                     _tpsl_confirmed = False
@@ -1685,10 +1722,12 @@ class ATEService:
                 continue
             api_key, api_secret = binance_keys
             user_binance = self._get_user_binance_service(user)
+            hedge_mode = False
 
             try:
-                binance_positions = await user_binance.get_user_positions(
-                    api_key, api_secret
+                hedge_mode, binance_positions = await asyncio.gather(
+                    user_binance.get_position_mode(api_key, api_secret),
+                    user_binance.get_user_positions(api_key, api_secret),
                 )
             except Exception as e:
                 logger.error(
@@ -1711,14 +1750,17 @@ class ATEService:
                     continue
 
                 # Position gone on Binance — get PnL from income history.
-                # Binance income records carry the PnL but NOT the exit price,
-                # so we always need the ticker fallback for the exit price.
+                # Prefer the actual close trade summary, then fall back to income history.
+                expected_position_side = (
+                    ("LONG" if is_buy else "SHORT") if hedge_mode else "BOTH"
+                )
+                close_summary = None
+                exit_price = 0.0
                 closed_pnl = 0.0
                 close_hash = None
                 closed_at = None
-                pnl_from_api = False
                 try:
-                    closed_pnl_data = await user_binance.get_closed_pnl(
+                    close_summary = await user_binance.get_close_trade_summary(
                         api_key,
                         api_secret,
                         symbol,
@@ -1728,44 +1770,82 @@ class ATEService:
                             ).timestamp()
                             * 1000
                         ),
-                        limit=20,
+                        expected_close_side="SELL" if is_buy else "BUY",
+                        expected_position_side=expected_position_side,
+                        entry_order_id=execution.exchange_order_id,
+                        expected_quantity=float(execution.quantity),
+                        limit=100,
                     )
-                    if closed_pnl_data:
-                        closed_pnl = closed_pnl_data.get("pnl", 0.0)
-                        close_hash = closed_pnl_data.get("close_hash")
-                        closed_at = closed_pnl_data.get("closed_at")
-                        pnl_from_api = True
+                    if close_summary:
+                        exit_price = float(close_summary.get("exit_price", 0) or 0)
+                        closed_pnl = float(close_summary.get("pnl", 0) or 0)
+                        close_hash = close_summary.get("close_hash")
+                        closed_at = close_summary.get("closed_at")
                         logger.info(
-                            "Binance income PnL for %s: pnl=%.4f", symbol, closed_pnl
+                            "Binance close trade summary for %s: exit=%.8f pnl=%.4f",
+                            symbol,
+                            exit_price,
+                            closed_pnl,
                         )
                 except Exception as e:
                     logger.warning(
-                        "Failed to get Binance income PnL for %s: %s", symbol, e
+                        "Failed to get Binance close trade summary for %s: %s",
+                        symbol,
+                        e,
                     )
 
-                # Fetch ticker for exit price (always required — income API has no exit price)
-                exit_price = 0.0
-                try:
-                    ticker = await user_binance.get_ticker(symbol)
-                    if ticker:
-                        bid = float(ticker.get("bidPrice") or 0)
-                        ask = float(ticker.get("askPrice") or 0)
-                        mid = (
-                            (bid + ask) / 2
-                            if bid > 0 and ask > 0
-                            else float(ticker.get("lastPrice") or 0)
+                if close_summary is None:
+                    try:
+                        closed_pnl_data = await user_binance.get_closed_pnl(
+                            api_key,
+                            api_secret,
+                            symbol,
+                            start_time_ms=int(
+                                ExecutionSyncService.get_execution_opened_at(
+                                    execution
+                                ).timestamp()
+                                * 1000
+                            ),
+                            limit=20,
                         )
-                        if mid > 0:
-                            exit_price = mid
-                            if not pnl_from_api:
-                                q = float(execution.quantity)
-                                closed_pnl = (
-                                    (mid - entry_price) * q
-                                    if is_buy
-                                    else (entry_price - mid) * q
-                                )
-                except Exception as e:
-                    logger.error("Failed to fetch Binance ticker for %s: %s", symbol, e)
+                        if closed_pnl_data:
+                            closed_pnl = closed_pnl_data.get("pnl", 0.0)
+                            close_hash = closed_pnl_data.get("close_hash")
+                            closed_at = closed_pnl_data.get("closed_at")
+                            logger.info(
+                                "Binance income PnL for %s: pnl=%.4f",
+                                symbol,
+                                closed_pnl,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to get Binance income PnL for %s: %s", symbol, e
+                        )
+
+                if exit_price <= 0:
+                    try:
+                        ticker = await user_binance.get_ticker(symbol)
+                        if ticker:
+                            bid = float(ticker.get("bidPrice") or 0)
+                            ask = float(ticker.get("askPrice") or 0)
+                            mid = (
+                                (bid + ask) / 2
+                                if bid > 0 and ask > 0
+                                else float(ticker.get("lastPrice") or 0)
+                            )
+                            if mid > 0:
+                                exit_price = mid
+                                if close_summary is None:
+                                    q = float(execution.quantity)
+                                    closed_pnl = (
+                                        (mid - entry_price) * q
+                                        if is_buy
+                                        else (entry_price - mid) * q
+                                    )
+                    except Exception as e:
+                        logger.error(
+                            "Failed to fetch Binance ticker for %s: %s", symbol, e
+                        )
 
                 if exit_price <= 0:
                     logger.warning(

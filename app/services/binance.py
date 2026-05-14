@@ -113,35 +113,57 @@ class BinanceService:
                 filters: dict[str, dict] = {}
                 for f in sym.get("filters", []):
                     filters[f["filterType"]] = f
+                lot_size = filters.get("LOT_SIZE", {})
+                market_lot_size = filters.get("MARKET_LOT_SIZE", {}) or lot_size
                 symbol_map[sym["symbol"]] = {
                     "tick_size": float(
                         filters.get("PRICE_FILTER", {}).get("tickSize", "0.01")
                     ),
-                    "step_size": float(
-                        filters.get("LOT_SIZE", {}).get("stepSize", "0.001")
+                    "step_size": float(lot_size.get("stepSize", "0.001")),
+                    "min_qty": float(lot_size.get("minQty", "0.001")),
+                    "max_qty": float(lot_size.get("maxQty", "0") or "inf"),
+                    "market_step_size": float(
+                        market_lot_size.get(
+                            "stepSize", lot_size.get("stepSize", "0.001")
+                        )
                     ),
-                    "min_qty": float(
-                        filters.get("LOT_SIZE", {}).get("minQty", "0.001")
+                    "market_min_qty": float(
+                        market_lot_size.get("minQty", lot_size.get("minQty", "0.001"))
                     ),
-                    "max_qty": float(
-                        filters.get("LOT_SIZE", {}).get("maxQty", "0") or "inf"
+                    "market_max_qty": float(
+                        market_lot_size.get("maxQty", lot_size.get("maxQty", "0"))
+                        or "inf"
                     ),
                     "min_notional": float(
                         filters.get("MIN_NOTIONAL", {}).get("notional", "5")
                     ),
+                    "trigger_protect": float(sym.get("triggerProtect", "0") or "0"),
                 }
         self._exchange_info_cache[cache_key] = symbol_map
         return symbol_map
 
-    async def get_lot_size_info(self, symbol: str) -> dict:
+    async def get_lot_size_info(self, symbol: str, order_type: str = "market") -> dict:
         """Return qty_step, min_order_qty, max_order_qty for a symbol."""
         try:
             info = await self.get_exchange_info()
             sym = info.get(symbol, {})
+            is_market = order_type.lower() == "market"
             return {
-                "qty_step": sym.get("step_size", 0.001),
-                "min_order_qty": sym.get("min_qty", 0.001),
-                "max_order_qty": sym.get("max_qty", float("inf")),
+                "qty_step": (
+                    sym.get("market_step_size", sym.get("step_size", 0.001))
+                    if is_market
+                    else sym.get("step_size", 0.001)
+                ),
+                "min_order_qty": (
+                    sym.get("market_min_qty", sym.get("min_qty", 0.001))
+                    if is_market
+                    else sym.get("min_qty", 0.001)
+                ),
+                "max_order_qty": (
+                    sym.get("market_max_qty", sym.get("max_qty", float("inf")))
+                    if is_market
+                    else sym.get("max_qty", float("inf"))
+                ),
             }
         except Exception:
             return {
@@ -150,13 +172,18 @@ class BinanceService:
                 "max_order_qty": float("inf"),
             }
 
-    async def get_tick_size(self, symbol: str) -> float:
-        """Return the price tick size for a symbol."""
+    async def get_symbol_rules(self, symbol: str) -> dict:
+        """Return cached trading rules for a symbol."""
         try:
             info = await self.get_exchange_info()
-            return info.get(symbol, {}).get("tick_size", 0.01)
+            return info.get(symbol, {})
         except Exception:
-            return 0.01
+            return {}
+
+    async def get_tick_size(self, symbol: str) -> float:
+        """Return the price tick size for a symbol."""
+        rules = await self.get_symbol_rules(symbol)
+        return rules.get("tick_size", 0.01)
 
     # ── Position mode ──────────────────────────────────────────────
 
@@ -749,6 +776,7 @@ class BinanceService:
                 "entry_px": float(p.get("entryPrice", 0)),
                 "unrealized_pnl": float(p.get("unRealizedProfit", 0)),
                 "side": "Buy" if amt > 0 else "Sell",
+                "position_side": p.get("positionSide", "BOTH"),
                 "mark_price": float(p.get("markPrice", 0)),
                 "leverage": float(p.get("leverage", 1)),
                 "liq_price": float(p.get("liquidationPrice", 0)) or None,
@@ -801,16 +829,19 @@ class BinanceService:
         """POST /fapi/v1/order — place a MARKET or LIMIT entry/close order."""
 
         def _place():
+            normalized_type = "LIMIT" if order_type == "limit" else "MARKET"
             params: dict[str, Any] = {
                 "symbol": symbol,
                 "side": "BUY" if is_buy else "SELL",
-                "type": "LIMIT" if order_type == "limit" else "MARKET",
+                "type": normalized_type,
                 "quantity": size,
                 "positionSide": position_side,
             }
             if order_type == "limit" and price:
                 params["price"] = price
                 params["timeInForce"] = "GTC"
+            if normalized_type == "MARKET":
+                params["newOrderRespType"] = "RESULT"
             if reduce_only and position_side == "BOTH":
                 # reduceOnly is only valid in ONE_WAY mode
                 params["reduceOnly"] = "true"
@@ -830,14 +861,62 @@ class BinanceService:
                         "data": data,
                         "tx_hash": str(data.get("orderId", "")),
                         "oid": data.get("orderId"),
+                        "avg_price": float(data.get("avgPrice", 0) or 0),
+                        "executed_qty": float(data.get("executedQty", 0) or 0),
+                        "status": data.get("status"),
                     }
                 except httpx.HTTPStatusError as e:
                     err = e.response.json() if e.response.content else {}
-                    return {"success": False, "error": err.get("msg", str(e))}
+                    return {
+                        "success": False,
+                        "error": err.get("msg", str(e)),
+                        "code": err.get("code"),
+                    }
                 except Exception as e:
                     return {"success": False, "error": str(e)}
 
         return await asyncio.to_thread(_place)
+
+    async def cancel_algo_order(
+        self,
+        api_key: str,
+        api_secret: str,
+        *,
+        algo_id: int | None = None,
+        client_algo_id: str | None = None,
+    ) -> dict:
+        """DELETE /fapi/v1/algoOrder â€” cancel an active conditional order."""
+
+        if algo_id is None and not client_algo_id:
+            return {"success": False, "error": "algo_id or client_algo_id is required"}
+
+        def _cancel():
+            params: dict[str, Any] = {}
+            if algo_id is not None:
+                params["algoId"] = algo_id
+            if client_algo_id:
+                params["clientAlgoId"] = client_algo_id
+            body = self._auth_params(api_secret, params)
+            with httpx.Client(timeout=15.0) as client:
+                try:
+                    r = client.delete(
+                        f"{self.base_url}/fapi/v1/algoOrder",
+                        params=body,
+                        headers=self._headers(api_key),
+                    )
+                    r.raise_for_status()
+                    return {"success": True, "data": r.json()}
+                except httpx.HTTPStatusError as e:
+                    err = e.response.json() if e.response.content else {}
+                    return {
+                        "success": False,
+                        "error": err.get("msg", str(e)),
+                        "code": err.get("code"),
+                    }
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+        return await asyncio.to_thread(_cancel)
 
     async def place_tp_sl_orders(
         self,
@@ -851,7 +930,7 @@ class BinanceService:
     ) -> dict:
         """Place TP and SL via POST /fapi/v1/algoOrder (CONDITIONAL type).
 
-        Binance requires TP/SL as separate algo orders (not inline with entry).
+        Binance requires TP/SL as separate algo orders.
         Both use workingType=MARK_PRICE to prevent false triggers from wicks.
         The closing side is opposite to the position direction.
         """
@@ -863,26 +942,31 @@ class BinanceService:
         sl_placed = False
         results: dict[str, Any] = {}
 
-        async def _place_algo(order_type: str, stop_price: float) -> dict:
-            rounded = self._round_step(stop_price, tick_size)
+        async def _place_algo(order_type: str, trigger_price: float) -> dict:
+            rounded = self._round_step(trigger_price, tick_size)
+            algo_tag = "tp" if order_type == "TAKE_PROFIT_MARKET" else "sl"
+            client_algo_id = (
+                f"ex-{symbol.lower()[:10]}-{algo_tag}-{int(time.time() * 1000)}"
+            )
 
             def _post():
                 params: dict[str, Any] = {
+                    "algoType": "CONDITIONAL",
                     "symbol": symbol,
                     "side": close_side,
                     "positionSide": position_side,
                     "type": order_type,
                     "workingType": "MARK_PRICE",
-                    "stopPrice": rounded,
+                    "triggerPrice": rounded,
                     "closePosition": "true",
-                    "timeInForce": "GTE_GTC",
                     "priceProtect": "true",
+                    "clientAlgoId": client_algo_id,
                 }
                 body = self._auth_params(api_secret, params)
                 with httpx.Client(timeout=15.0) as client:
                     try:
                         r = client.post(
-                            f"{self.base_url}/fapi/v1/order",
+                            f"{self.base_url}/fapi/v1/algoOrder",
                             data=body,
                             headers=self._headers(api_key),
                         )
@@ -890,7 +974,12 @@ class BinanceService:
                         return {"success": True, "data": r.json()}
                     except httpx.HTTPStatusError as e:
                         err = e.response.json() if e.response.content else {}
-                        return {"success": False, "error": err.get("msg", str(e))}
+                        return {
+                            "success": False,
+                            "error": err.get("msg", str(e)),
+                            "code": err.get("code"),
+                            "clientAlgoId": client_algo_id,
+                        }
                     except Exception as e:
                         return {"success": False, "error": str(e)}
 
@@ -909,6 +998,22 @@ class BinanceService:
         success = (take_profit_price is None or tp_placed) and (
             stop_loss_price is None or sl_placed
         )
+        if not success:
+            cleanup: dict[str, Any] = {}
+            for key in ("tp", "sl"):
+                result = results.get(key)
+                if not result or not result.get("success"):
+                    continue
+                payload = result.get("data", {})
+                cleanup[f"cancel_{key}"] = await self.cancel_algo_order(
+                    api_key,
+                    api_secret,
+                    algo_id=payload.get("algoId"),
+                    client_algo_id=payload.get("clientAlgoId"),
+                )
+            if cleanup:
+                results["cleanup"] = cleanup
+
         return {
             "success": success,
             "tp_placed": tp_placed,
@@ -938,6 +1043,157 @@ class BinanceService:
         )
 
     # ── Authenticated: closed PnL history ──────────────────────────
+
+    async def get_user_trades(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        *,
+        order_id: int | None = None,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """GET /fapi/v1/userTrades â€” fetch recent trades for a symbol."""
+
+        def _fetch():
+            extra: dict[str, Any] = {"symbol": symbol, "limit": limit}
+            if order_id is not None:
+                extra["orderId"] = order_id
+
+            now_ms = int(time.time() * 1000)
+            if start_time_ms and now_ms - start_time_ms <= 7 * 24 * 60 * 60 * 1000:
+                extra["startTime"] = start_time_ms
+                if end_time_ms:
+                    extra["endTime"] = end_time_ms
+
+            params = self._auth_params(api_secret, extra)
+            with httpx.Client(timeout=10.0) as client:
+                r = client.get(
+                    f"{self.base_url}/fapi/v1/userTrades",
+                    params=params,
+                    headers=self._headers(api_key),
+                )
+                r.raise_for_status()
+                return r.json()
+
+        return await asyncio.to_thread(_fetch)
+
+    @classmethod
+    def _summarize_close_trade_group(cls, trades: list[dict[str, Any]]) -> dict | None:
+        if not trades:
+            return None
+
+        total_qty = 0.0
+        total_quote = 0.0
+        total_pnl = 0.0
+        latest_time = 0
+        latest_order_id = None
+
+        for trade in trades:
+            qty = float(trade.get("qty", 0) or 0)
+            price = float(trade.get("price", 0) or 0)
+            quote_qty = float(trade.get("quoteQty", 0) or 0)
+            total_qty += qty
+            total_quote += quote_qty if quote_qty > 0 else price * qty
+            total_pnl += float(trade.get("realizedPnl", 0) or 0)
+            trade_time = int(trade.get("time", 0) or 0)
+            if trade_time >= latest_time:
+                latest_time = trade_time
+                latest_order_id = trade.get("orderId")
+
+        if total_qty <= 0:
+            return None
+
+        return {
+            "pnl": total_pnl,
+            "exit_price": total_quote / total_qty if total_quote > 0 else 0.0,
+            "entry_price": 0.0,
+            "close_hash": str(latest_order_id or ""),
+            "closed_at": (
+                datetime.fromtimestamp(latest_time / 1000, tz=timezone.utc)
+                if latest_time
+                else None
+            ),
+            "quantity": total_qty,
+            "raw_trades": trades,
+        }
+
+    async def get_close_trade_summary(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        expected_close_side: str | None = None,
+        expected_position_side: str | None = None,
+        entry_order_id: str | None = None,
+        expected_quantity: float | None = None,
+        limit: int = 100,
+    ) -> dict | None:
+        """Summarize the close trade group for a recently closed position."""
+
+        try:
+            trades = await self.get_user_trades(
+                api_key,
+                api_secret,
+                symbol,
+                start_time_ms=start_time_ms,
+                limit=limit,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch Binance userTrades for %s: %s", symbol, e)
+            return None
+
+        groups: dict[int, list[dict[str, Any]]] = {}
+        for trade in trades:
+            trade_time = int(trade.get("time", 0) or 0)
+            if start_time_ms and trade_time and trade_time < start_time_ms:
+                continue
+            if expected_close_side and trade.get("side") != expected_close_side:
+                continue
+            if (
+                expected_position_side
+                and trade.get("positionSide")
+                and trade.get("positionSide") != expected_position_side
+            ):
+                continue
+            order_id = trade.get("orderId")
+            if entry_order_id is not None and str(order_id) == str(entry_order_id):
+                continue
+            if order_id is None:
+                continue
+            groups.setdefault(int(order_id), []).append(trade)
+
+        if not groups:
+            return None
+
+        target_qty = float(expected_quantity or 0)
+        best_score = -1
+        best_summary: dict | None = None
+        for grouped_trades in groups.values():
+            summary = self._summarize_close_trade_group(grouped_trades)
+            if summary is None:
+                continue
+            latest_time = max(int(t.get("time", 0) or 0) for t in grouped_trades)
+            qty_ratio = (
+                min(summary["quantity"] / target_qty, 1.0) if target_qty > 0 else 0.0
+            )
+            realized_flag = any(
+                abs(float(t.get("realizedPnl", 0) or 0)) > 1e-12 for t in grouped_trades
+            )
+            score = latest_time
+            if realized_flag:
+                score += 10_000_000_000_000
+            score += int(qty_ratio * 1_000_000_000_000)
+
+            if score > best_score:
+                best_score = score
+                best_summary = summary
+
+        return best_summary
 
     async def get_closed_pnl(
         self,

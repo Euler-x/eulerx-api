@@ -13,10 +13,15 @@ settings = get_settings()
 class BybitService:
     """Bybit V5 API service for linear perpetual futures."""
 
-    def __init__(self, api_key: str = "", api_secret: str = "", testnet: bool = False):
+    def __init__(
+        self,
+        api_key: str = "",
+        api_secret: str = "",
+        testnet: bool | None = None,
+    ):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.testnet = testnet or settings.bybit_testnet
+        self.testnet = settings.bybit_testnet if testnet is None else testnet
         self.base_url = (
             "https://api-testnet.bybit.com" if self.testnet else "https://api.bybit.com"
         )
@@ -616,11 +621,18 @@ class BybitService:
                         "side": p.get("side"),
                         "mark_price": float(p.get("markPrice", 0)),
                         "leverage": float(p.get("leverage", 0)),
+                        "position_idx": int(p.get("positionIdx") or 0),
                         "liq_price": float(p.get("liqPrice", 0))
                         if p.get("liqPrice")
                         else None,
                         "position_value": float(p.get("positionValue", 0)),
                         "margin_used": float(p.get("positionIM", 0)),
+                        "take_profit": (
+                            float(p.get("takeProfit")) if p.get("takeProfit") else None
+                        ),
+                        "stop_loss": (
+                            float(p.get("stopLoss")) if p.get("stopLoss") else None
+                        ),
                     }
             return positions
 
@@ -832,11 +844,15 @@ class BybitService:
                 "symbol": symbol,
                 "tpslMode": "Full",
                 "positionIdx": 0,
+                "tpOrderType": "Market",
+                "slOrderType": "Market",
             }
             if take_profit_price is not None:
                 params["takeProfit"] = str(take_profit_price)
+                params["tpTriggerBy"] = "MarkPrice"
             if stop_loss_price is not None:
                 params["stopLoss"] = str(stop_loss_price)
+                params["slTriggerBy"] = "MarkPrice"
 
             try:
                 resp = session.set_trading_stop(**params)
@@ -922,20 +938,162 @@ class BybitService:
         except Exception:
             return 0.001
 
-    async def get_lot_size_info(self, symbol: str) -> dict:
-        """Return qty_step, min_order_qty, and max_order_qty in one API call."""
+    async def get_lot_size_info(self, symbol: str, order_type: str = "limit") -> dict:
+        """Return qty sizing limits in one API call.
+
+        Bybit exposes a separate market-order max (`maxMktOrderQty`) from the
+        limit/post-only max (`maxOrderQty`). Market orders must respect the
+        market-specific cap.
+        """
         try:
             info = await self.get_instrument_info(symbol)
             lot_filter = info.get("lotSizeFilter", {})
+            max_limit_order_qty = float(
+                lot_filter.get("maxOrderQty")
+                or lot_filter.get("maxLimitOrderQty")
+                or "0"
+            )
+            max_market_order_qty = float(
+                lot_filter.get("maxMktOrderQty")
+                or lot_filter.get("maxMarketOrderQty")
+                or "0"
+            )
+            max_order_qty = (
+                max_market_order_qty
+                if order_type.lower() == "market" and max_market_order_qty > 0
+                else max_limit_order_qty
+            )
             return {
                 "qty_step": float(lot_filter.get("qtyStep", "0.001")),
                 "min_order_qty": float(lot_filter.get("minOrderQty", "0.001")),
-                "max_order_qty": float(lot_filter.get("maxOrderQty", "0"))
-                or float("inf"),
+                "max_order_qty": max_order_qty or float("inf"),
+                "max_limit_order_qty": max_limit_order_qty or float("inf"),
+                "max_market_order_qty": max_market_order_qty or float("inf"),
             }
         except Exception:
             return {
                 "qty_step": 0.001,
                 "min_order_qty": 0.001,
                 "max_order_qty": float("inf"),
+                "max_limit_order_qty": float("inf"),
+                "max_market_order_qty": float("inf"),
             }
+
+    async def get_order_history(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent order records for a specific order."""
+
+        def _fetch():
+            session = self._get_session(api_key, api_secret)
+            records: list[dict[str, Any]] = []
+
+            for fetcher in (session.get_open_orders, session.get_order_history):
+                resp = fetcher(
+                    category="linear",
+                    symbol=symbol,
+                    orderId=order_id,
+                    limit=limit,
+                )
+                if resp.get("retCode") != 0:
+                    continue
+                records.extend(resp.get("result", {}).get("list", []))
+
+            deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for record in records:
+                key = (
+                    str(record.get("orderId") or ""),
+                    str(record.get("updatedTime") or record.get("createdTime") or ""),
+                    str(record.get("orderStatus") or ""),
+                )
+                deduped[key] = record
+
+            return list(deduped.values())
+
+        return await asyncio.to_thread(_fetch)
+
+    async def get_order_fill_summary(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: str,
+    ) -> dict[str, Any] | None:
+        """Get the latest filled quantity and average price for an order."""
+        records = await self.get_order_history(
+            api_key,
+            api_secret,
+            symbol,
+            order_id,
+            limit=20,
+        )
+        if not records:
+            return None
+
+        best_record = None
+        best_score = None
+        for record in records:
+            updated_time_ms = int(
+                record.get("updatedTime") or record.get("createdTime") or 0
+            )
+            avg_price = float(record.get("avgPrice") or 0)
+            cum_exec_qty = float(record.get("cumExecQty") or 0)
+
+            score = updated_time_ms
+            if avg_price > 0:
+                score += 10_000_000_000_000
+            if cum_exec_qty > 0:
+                score += 5_000_000_000_000
+
+            if best_score is None or score > best_score:
+                best_score = score
+                best_record = record
+
+        if not best_record:
+            return None
+
+        avg_price = float(best_record.get("avgPrice") or 0)
+        executed_qty = float(best_record.get("cumExecQty") or 0)
+        if avg_price <= 0 and executed_qty <= 0:
+            return None
+
+        return {
+            "order_id": str(best_record.get("orderId") or order_id),
+            "avg_price": avg_price,
+            "executed_qty": executed_qty,
+            "status": best_record.get("orderStatus"),
+        }
+
+    async def wait_for_order_fill(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: str,
+        order_id: str,
+        *,
+        attempts: int = 6,
+        delay_seconds: float = 1.0,
+    ) -> dict[str, Any] | None:
+        """Poll Bybit order endpoints for average fill price and executed qty."""
+        for attempt in range(attempts):
+            summary = await self.get_order_fill_summary(
+                api_key,
+                api_secret,
+                symbol,
+                order_id,
+            )
+            if summary and (
+                float(summary.get("avg_price", 0) or 0) > 0
+                or float(summary.get("executed_qty", 0) or 0) > 0
+            ):
+                return summary
+
+            if attempt < attempts - 1:
+                await asyncio.sleep(delay_seconds)
+
+        return None

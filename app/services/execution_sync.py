@@ -8,6 +8,7 @@ from app.models.bybit_signal import BybitSignal
 from app.models.enums import ExecutionStatus, SignalDirection
 from app.models.execution import Execution
 from app.models.signal import Signal
+from app.services.binance import BinanceService
 from app.services.bybit import BybitService
 from app.services.hyperliquid import HyperliquidService
 from app.utils.helpers import utc_now
@@ -50,7 +51,7 @@ class ExecutionSyncService:
     def derive_close_reason(
         cls,
         execution: Execution,
-        signal: Signal | BybitSignal | None,
+        signal: Signal | BybitSignal | BinanceSignal | None,
         exit_price: float,
         manual_close: bool = False,
     ) -> str:
@@ -82,7 +83,7 @@ class ExecutionSyncService:
     def apply_close_details(
         cls,
         execution: Execution,
-        signal: Signal | BybitSignal | None,
+        signal: Signal | BybitSignal | BinanceSignal | None,
         *,
         exit_price: float,
         closed_pnl: float = 0.0,
@@ -278,6 +279,51 @@ class ExecutionSyncService:
             )
             if closed_pnl and positions.get(symbol) is None:
                 return closed_pnl
+
+            if attempt < attempts - 1:
+                await asyncio.sleep(delay_seconds)
+
+        return None
+
+    @classmethod
+    async def wait_for_binance_close(
+        cls,
+        binance: BinanceService,
+        execution: Execution,
+        api_key: str,
+        api_secret: str,
+        *,
+        position_side: str = "BOTH",
+        attempts: int = 6,
+        delay_seconds: float = 2.0,
+    ) -> dict[str, Any] | None:
+        signal = cls.get_signal(execution)
+        if signal is None:
+            return None
+
+        symbol = signal.symbol
+        opened_at_ms = int(cls.get_execution_opened_at(execution).timestamp() * 1000)
+        expected_close_side = (
+            "SELL" if execution.direction == SignalDirection.BUY else "BUY"
+        )
+
+        for attempt in range(attempts):
+            positions, close_trade = await asyncio.gather(
+                binance.get_user_positions(api_key, api_secret),
+                binance.get_close_trade_summary(
+                    api_key,
+                    api_secret,
+                    symbol,
+                    start_time_ms=opened_at_ms,
+                    expected_close_side=expected_close_side,
+                    expected_position_side=position_side,
+                    entry_order_id=execution.exchange_order_id,
+                    expected_quantity=cls._safe_float(execution.quantity),
+                    limit=100,
+                ),
+            )
+            if close_trade and positions.get(symbol) is None:
+                return close_trade
 
             if attempt < attempts - 1:
                 await asyncio.sleep(delay_seconds)
