@@ -53,3 +53,26 @@ class BybitSignalResponse(BaseModel):
 class BybitSignalDetailResponse(BybitSignalResponse):
     model_responses: Optional[dict] = None
     executions: list[ExecutionResponse] = []
+
+
+class BinanceSignalResponse(BaseModel):
+    id: uuid.UUID
+    symbol: str
+    direction: SignalDirection
+    confidence: float
+    entry_price: float
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+    risk_reward_ratio: Optional[float]
+    indicators: Optional[dict]
+    status: SignalStatus
+    exchange: str = "binance"
+    expires_at: Optional[datetime]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class BinanceSignalDetailResponse(BinanceSignalResponse):
+    model_responses: Optional[dict] = None
+    executions: list[ExecutionResponse] = []
