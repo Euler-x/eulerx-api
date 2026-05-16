@@ -34,6 +34,7 @@ from app.services.ambassador import (
     RANK_ADVANCEMENT_BONUSES,
     calculate_commission_for_month,
     calculate_leadership_pool,
+    calculate_loyalty_retention_bonus,
     check_fast_start_bonus,
     check_performance_milestones,
     check_rank_qualification,
@@ -48,7 +49,7 @@ from app.utils.security import create_access_token
 # ── Shared test helpers ───────────────────────────────────────────────────────
 
 
-async def _make_plan(price: float = 250.0) -> Plan:
+async def _make_plan(price: float = 100.0) -> Plan:
     async with TestSessionFactory() as db:
         plan = Plan(
             name=f"Plan-{uuid.uuid4().hex[:6]}",
@@ -176,8 +177,8 @@ async def test_tav_includes_all_depth_levels(setup_db):
 
 @pytest.mark.asyncio
 async def test_l1_commission_is_25_pct(setup_db):
-    """L1 referral on a $250 plan earns 25% = $62.50."""
-    plan = await _make_plan(250.0)
+    """L1 referral on a $100 plan earns 25% = $25.00."""
+    plan = await _make_plan(100.0)
     top_user, _ = await _make_user()
     top = await _make_ambassador(top_user.id)
 
@@ -189,14 +190,14 @@ async def test_l1_commission_is_25_pct(setup_db):
         comm = await calculate_commission_for_month(fresh_top, 5, 2026, db)
         await db.commit()
 
-    assert round(float(comm.commission_amount), 2) == 62.50
-    assert round(float(comm.level_breakdown.get("1", 0)), 2) == 62.50
+    assert round(float(comm.commission_amount), 2) == 25.00
+    assert round(float(comm.level_breakdown.get("1", 0)), 2) == 25.00
 
 
 @pytest.mark.asyncio
 async def test_l2_commission_is_8_pct(setup_db):
-    """Silver Leader earns L1 25% + L2 8% on a $250 plan → $82.50 total."""
-    plan = await _make_plan(250.0)
+    """Silver Leader earns L1 25% + L2 8% on a $100 plan = $33.00 total."""
+    plan = await _make_plan(100.0)
     top_user, _ = await _make_user()
     top = await _make_ambassador(top_user.id, rank=AmbassadorRank.SILVER_LEADER)
 
@@ -211,15 +212,15 @@ async def test_l2_commission_is_8_pct(setup_db):
         comm = await calculate_commission_for_month(fresh_top, 5, 2026, db)
         await db.commit()
 
-    assert round(float(comm.commission_amount), 2) == 82.50
-    assert round(float(comm.level_breakdown.get("1", 0)), 2) == 62.50
-    assert round(float(comm.level_breakdown.get("2", 0)), 2) == 20.00
+    assert round(float(comm.commission_amount), 2) == 33.00
+    assert round(float(comm.level_breakdown.get("1", 0)), 2) == 25.00
+    assert round(float(comm.level_breakdown.get("2", 0)), 2) == 8.00
 
 
 @pytest.mark.asyncio
 async def test_associate_cannot_earn_l2_commission(setup_db):
     """Associate (max_depth=1) earns L1 only, not L2."""
-    plan = await _make_plan(250.0)
+    plan = await _make_plan(100.0)
     top_user, _ = await _make_user()
     top = await _make_ambassador(top_user.id, rank=AmbassadorRank.ASSOCIATE)
 
@@ -234,14 +235,14 @@ async def test_associate_cannot_earn_l2_commission(setup_db):
         comm = await calculate_commission_for_month(fresh_top, 5, 2026, db)
         await db.commit()
 
-    assert round(float(comm.commission_amount), 2) == 62.50
+    assert round(float(comm.commission_amount), 2) == 25.00
     assert "2" not in (comm.level_breakdown or {})
 
 
 @pytest.mark.asyncio
 async def test_commission_upsert_on_recalculate(setup_db):
     """Recalculating a pending commission updates it in place."""
-    plan = await _make_plan(250.0)
+    plan = await _make_plan(100.0)
     top_user, _ = await _make_user()
     top = await _make_ambassador(top_user.id)
 
@@ -259,6 +260,35 @@ async def test_commission_upsert_on_recalculate(setup_db):
         await db.commit()
 
     assert comm1.id == comm2.id  # same record, not duplicated
+
+
+@pytest.mark.asyncio
+async def test_loyalty_retention_bonus_uses_plan_price(setup_db):
+    """Loyalty retention pays 10% of the active subscriber's plan price."""
+    plan = await _make_plan(100.0)
+    top_user, _ = await _make_user()
+    top = await _make_ambassador(top_user.id)
+
+    member_user, _ = await _make_user(subscribed=True, plan=plan)
+    await _make_ambassador(member_user.id, referred_by=top.id)
+
+    async with TestSessionFactory() as db:
+        old_start = add_days(utc_now(), -400)
+        result = await db.execute(
+            select(Subscription).where(Subscription.user_id == member_user.id)
+        )
+        sub = result.scalar_one()
+        sub.created_at = old_start
+        sub.started_at = old_start
+        await db.commit()
+
+    async with TestSessionFactory() as db:
+        fresh_top = await db.get(Ambassador, top.id)
+        bonus = await calculate_loyalty_retention_bonus(fresh_top, 5, 2026, db)
+        await db.commit()
+
+    assert bonus is not None
+    assert round(float(bonus.amount), 2) == 10.00
 
 
 # ── Service layer: rank qualification ─────────────────────────────────────────
@@ -674,7 +704,7 @@ async def test_travel_empty_for_new_ambassador(client, setup_db, test_user):
 @pytest.mark.asyncio
 async def test_referrals_list_shows_subscribed_status(client, setup_db):
     """GET /ambassador/referrals shows referral with is_subscribed=True when subscribed."""
-    plan = await _make_plan(250.0)
+    plan = await _make_plan(100.0)
     leader_user, leader_headers = await _make_user()
 
     r = await client.post("/api/v1/ambassador/referral", headers=leader_headers)
@@ -857,10 +887,10 @@ async def test_admin_create_payout_marks_commission_paid(client, setup_db, admin
             ambassador_id=amb.id,
             month=5,
             year=2026,
-            commission_amount=62.50,
+            commission_amount=25.00,
             active_referral_count=1,
             tav_count=1,
-            level_breakdown={"1": 62.50},
+            level_breakdown={"1": 25.00},
             status=CommissionStatus.PENDING,
         )
         db.add(comm)
@@ -872,7 +902,7 @@ async def test_admin_create_payout_marks_commission_paid(client, setup_db, admin
         json={"commission_ids": [str(comm_id)], "bonus_ids": []},
     )
     assert r.status_code == 200
-    assert r.json()["total_amount"] == 62.50
+    assert r.json()["total_amount"] == 25.00
 
     async with TestSessionFactory() as db:
         result = await db.execute(

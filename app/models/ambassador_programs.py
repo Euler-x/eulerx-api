@@ -98,7 +98,7 @@ class AmbassadorCommission(Base, TimestampMixin):
     # tav_count: total active subscribers across all levels this month
     tav_count: Mapped[int] = mapped_column(Integer, default=0)
     commission_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
-    # level_breakdown: {1: 62.50, 2: 20.00, ...} — commission per level
+    # level_breakdown: {1: 25.00, 2: 8.00, ...} — commission per level
     level_breakdown: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # generational_override: 1% Crown+ override amount beyond L10
     generational_override: Mapped[float] = mapped_column(Numeric(10, 2), default=0)

@@ -33,7 +33,7 @@ Entity: Bayes Euler Ltd. (BVI). US/UK/EU/Singapore registrations in progress.
 Classification: Technology services provider (not broker/custodian/adviser).
 
 Plan:
-  EulerX ATE — $250/month. Full access to everything: both exchanges (HyperLiquid + Bybit),
+  EulerX ATE — $100/month. Full access to everything: supported exchanges,
   unlimited strategies, advanced analytics, Telegram alerts, priority execution, AI consensus
   signals with full reasoning, and dedicated support. 7-day free trial available.
   No tiers, no feature gates — one plan, complete access.

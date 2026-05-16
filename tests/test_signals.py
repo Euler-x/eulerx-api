@@ -35,7 +35,7 @@ async def test_binance_signal_endpoints_return_signals(client, setup_db):
         plan = Plan(
             id=plan_id,
             name=f"Signals Test {uuid.uuid4().hex[:8]}",
-            price_usd=Decimal("250.00"),
+            price_usd=Decimal("100.00"),
             billing_cycle=BillingCycle.MONTHLY,
             ate_access=True,
         )

@@ -80,7 +80,7 @@ LEVEL_RATES: dict[int, float] = {
     10: 2.0,
 }
 
-SUBSCRIPTION_PRICE = 250.0  # ATE Pro monthly price
+SUBSCRIPTION_PRICE = 100.0  # EulerX ATE monthly price
 
 # ── Max depth each rank can earn on ──────────────────────────────────────────
 
@@ -727,14 +727,14 @@ async def check_fast_start_bonus(
 
 # ── Loyalty Retention Bonus ───────────────────────────────────────────────────
 
-LOYALTY_BONUS_PER_SUB = 25.0
+LOYALTY_BONUS_RATE = 10.0
 LOYALTY_MIN_MONTHS = 12
 
 
 async def calculate_loyalty_retention_bonus(
     ambassador: Ambassador, month: int, year: int, db: AsyncSession
 ) -> Optional[AmbassadorBonus]:
-    """Award $25/month per L1 subscriber who has been active for 12+ uninterrupted months."""
+    """Award 10% of plan price per L1 subscriber active for 12+ uninterrupted months."""
     period = f"{year}-{month:02d}"
 
     existing = await db.execute(
@@ -754,6 +754,7 @@ async def calculate_loyalty_retention_bonus(
     direct_refs = refs_result.scalars().all()
 
     loyalty_count = 0
+    amount = 0.0
     cutoff = utc_now() - timedelta(days=LOYALTY_MIN_MONTHS * 30)
 
     for ref in direct_refs:
@@ -767,11 +768,13 @@ async def calculate_loyalty_retention_bonus(
             sub_start = sub_start.replace(tzinfo=timezone.utc)
         if sub_start <= cutoff:
             loyalty_count += 1
+            price = await get_plan_price_for_user(ref.user_id, db)
+            amount += price * (LOYALTY_BONUS_RATE / 100)
 
-    if loyalty_count == 0:
+    if loyalty_count == 0 or amount <= 0:
         return None
 
-    amount = round(loyalty_count * LOYALTY_BONUS_PER_SUB, 2)
+    amount = round(amount, 2)
     bonus = AmbassadorBonus(
         id=uuid.uuid4(),
         ambassador_id=ambassador.id,
