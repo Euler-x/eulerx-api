@@ -66,6 +66,51 @@ class BinanceService:
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
+    @staticmethod
+    def _format_api_error(response: httpx.Response) -> str:
+        """Return an actionable Binance credential validation error."""
+        status_code = response.status_code
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+
+        binance_code = payload.get("code")
+        binance_msg = str(payload.get("msg") or response.text[:200] or "").strip()
+
+        if binance_code == -2015:
+            return (
+                "Binance rejected this key for the selected environment. "
+                "Use a Binance.com USD-M Futures API key for mainnet, confirm your "
+                "Futures account is activated, enable Futures permission on the key, "
+                "and if IP restriction is enabled whitelist the server IP. "
+                f"Binance message: {binance_msg}"
+            )
+        if binance_code == -2014:
+            return "Invalid Binance API key format. Check that the full API key was copied."
+        if binance_code == -1022:
+            return "Invalid Binance API secret or signature. Check that the full secret was copied."
+        if binance_code == -1021:
+            return (
+                "Binance rejected the request timestamp. Please try again; if it persists, "
+                "the server clock needs to be synchronized."
+            )
+        if binance_code == -1100:
+            return "Invalid characters in the Binance API key or secret."
+        if status_code == 403:
+            return (
+                "Binance blocked this request. Check Futures permissions, IP whitelist "
+                "settings, and regional availability for Binance Futures."
+            )
+        if status_code == 401:
+            return (
+                "Binance rejected this API key. Check that it belongs to the selected "
+                "mainnet/testnet environment and has USD-M Futures access."
+            )
+        if binance_msg:
+            return f"Binance HTTP {status_code}: {binance_msg}"
+        return f"Binance HTTP {status_code}"
+
     # ── Precision helpers ──────────────────────────────────────────
 
     @staticmethod
@@ -1272,12 +1317,7 @@ class BinanceService:
                 return True, f"Valid. USDT balance: ${equity:.2f}"
             return False, "Unexpected response from Binance"
         except httpx.HTTPStatusError as e:
-            code = e.response.status_code
-            if code == 401:
-                return False, "Invalid API key"
-            if code == 403:
-                return False, "API key does not have Futures trading permissions"
-            return False, f"HTTP {code}: {e.response.text[:200]}"
+            return False, self._format_api_error(e.response)
         except Exception as e:
             err = str(e)
             if "-2014" in err or "-1100" in err:

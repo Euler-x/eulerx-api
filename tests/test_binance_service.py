@@ -1,8 +1,39 @@
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from app.services.binance import BinanceService
+
+
+def test_init_respects_explicit_testnet_flag(monkeypatch):
+    service = BinanceService(testnet=False)
+
+    assert service.testnet is False
+    assert service.base_url == "https://fapi.binance.com"
+
+
+def test_format_api_error_explains_mainnet_rejection():
+    response = httpx.Response(
+        401,
+        json={
+            "code": -2015,
+            "msg": "Invalid API-key, IP, or permissions for action.",
+        },
+    )
+
+    message = BinanceService._format_api_error(response)
+
+    assert "selected environment" in message
+    assert "Futures account is activated" in message
+    assert "whitelist the server IP" in message
+    assert "Invalid API-key, IP, or permissions" in message
+
+
+def test_format_api_error_explains_bad_secret_signature():
+    response = httpx.Response(400, json={"code": -1022, "msg": "Signature invalid"})
+
+    assert "API secret" in BinanceService._format_api_error(response)
 
 
 @pytest.mark.asyncio
