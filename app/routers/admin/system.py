@@ -130,9 +130,7 @@ TASK_DEFINITIONS = [
 ]
 
 EXCHANGE_PIPELINE_TASK_NAMES = {
-    td["name"]
-    for td in TASK_DEFINITIONS
-    if td["name"].startswith("analysis-pipeline-")
+    td["name"] for td in TASK_DEFINITIONS if td["name"].startswith("analysis-pipeline-")
 }
 
 
