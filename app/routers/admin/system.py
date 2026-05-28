@@ -314,7 +314,7 @@ async def list_tasks(db: AsyncSession = Depends(get_db)):
         select(AdminConfig).where(AdminConfig.key == "disabled_tasks")
     )
     config = result.scalar_one_or_none()
-    disabled_tasks: list[str] = config.value.get("tasks", []) if config else []
+    disabled_tasks: list[str] = list(config.value.get("tasks", [])) if config else []
 
     tasks = []
     legacy_analysis_disabled = "analysis-pipeline" in disabled_tasks
@@ -368,7 +368,7 @@ async def toggle_task(
         )
         db.add(config)
 
-    disabled: list[str] = config.value.get("tasks", [])
+    disabled: list[str] = list(config.value.get("tasks", []))
 
     if body.enabled:
         if task_name in disabled:
