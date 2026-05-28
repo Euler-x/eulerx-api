@@ -129,6 +129,12 @@ TASK_DEFINITIONS = [
     },
 ]
 
+EXCHANGE_PIPELINE_TASK_NAMES = {
+    td["name"]
+    for td in TASK_DEFINITIONS
+    if td["name"].startswith("analysis-pipeline-")
+}
+
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -371,13 +377,18 @@ async def toggle_task(
     disabled: list[str] = list(config.value.get("tasks", []))
 
     if body.enabled:
-        if task_name in disabled:
-            disabled.remove(task_name)
         if (
             task_name.startswith("analysis-pipeline-")
             and "analysis-pipeline" in disabled
         ):
+            disabled.extend(
+                name
+                for name in EXCHANGE_PIPELINE_TASK_NAMES
+                if name != task_name and name not in disabled
+            )
             disabled.remove("analysis-pipeline")
+        if task_name in disabled:
+            disabled.remove(task_name)
     elif task_name not in disabled:
         disabled.append(task_name)
 
