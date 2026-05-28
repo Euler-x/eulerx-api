@@ -373,7 +373,10 @@ async def toggle_task(
     if body.enabled:
         if task_name in disabled:
             disabled.remove(task_name)
-        if task_name.startswith("analysis-pipeline-") and "analysis-pipeline" in disabled:
+        if (
+            task_name.startswith("analysis-pipeline-")
+            and "analysis-pipeline" in disabled
+        ):
             disabled.remove("analysis-pipeline")
     elif task_name not in disabled:
         disabled.append(task_name)

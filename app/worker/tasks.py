@@ -602,7 +602,9 @@ def _run_analysis_pipeline_for_exchange(exchange: str) -> dict:
         for sig_info in signal_ids:
             sig_id = sig_info["id"] if isinstance(sig_info, dict) else sig_info
             sig_exchange = (
-                sig_info.get("exchange", exchange) if isinstance(sig_info, dict) else exchange
+                sig_info.get("exchange", exchange)
+                if isinstance(sig_info, dict)
+                else exchange
             )
             try:
                 result = run_async(
@@ -639,7 +641,9 @@ def _run_analysis_pipeline_for_exchange(exchange: str) -> dict:
         "strategies_processed": len(active_strategy_ids),
         "executions_attempted": total_executions,
     }
-    logger.info("[Pipeline %s] %s pipeline completed: %s", pipeline_id, exchange, summary)
+    logger.info(
+        "[Pipeline %s] %s pipeline completed: %s", pipeline_id, exchange, summary
+    )
     return summary
 
 
