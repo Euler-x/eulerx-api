@@ -58,6 +58,9 @@ celery_app.conf.update(
     # Queue routing
     task_routes={
         "app.worker.tasks.run_analysis_pipeline": {"queue": "analysis"},
+        "app.worker.tasks.run_hyperliquid_analysis_pipeline": {"queue": "analysis"},
+        "app.worker.tasks.run_bybit_analysis_pipeline": {"queue": "analysis"},
+        "app.worker.tasks.run_binance_analysis_pipeline": {"queue": "analysis"},
         "app.worker.tasks.fetch_market_data": {"queue": "analysis"},
         "app.worker.tasks.generate_signals": {"queue": "signals"},
         "app.worker.tasks.execute_signal_task": {"queue": "execution"},
@@ -74,8 +77,30 @@ celery_app.conf.update(
     worker_max_memory_per_child=512_000,
     # Beat schedule
     beat_schedule={
-        "analysis-pipeline-every-2h": {
-            "task": "app.worker.tasks.run_analysis_pipeline",
+        "hyperliquid-analysis-pipeline-every-2h": {
+            "task": "app.worker.tasks.run_hyperliquid_analysis_pipeline",
+            "schedule": crontab(
+                minute="0",
+                hour=f"*/{settings.analysis_schedule_hours}",
+            ),
+            "options": {
+                "queue": "analysis",
+                "expires": settings.analysis_schedule_hours * 3600,
+            },
+        },
+        "bybit-analysis-pipeline-every-2h": {
+            "task": "app.worker.tasks.run_bybit_analysis_pipeline",
+            "schedule": crontab(
+                minute="0",
+                hour=f"*/{settings.analysis_schedule_hours}",
+            ),
+            "options": {
+                "queue": "analysis",
+                "expires": settings.analysis_schedule_hours * 3600,
+            },
+        },
+        "binance-analysis-pipeline-every-2h": {
+            "task": "app.worker.tasks.run_binance_analysis_pipeline",
             "schedule": crontab(
                 minute="0",
                 hour=f"*/{settings.analysis_schedule_hours}",

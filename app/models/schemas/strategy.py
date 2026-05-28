@@ -1,10 +1,12 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from app.models.enums import RiskProfile, StrategyTimeframe, StrategyType
+
+StrategyExchangeTarget = Literal["hyperliquid", "bybit", "binance", "both", "all"]
 
 
 class StrategyCreate(BaseModel):
@@ -21,7 +23,7 @@ class StrategyCreate(BaseModel):
     timeframe: Optional[StrategyTimeframe] = None
     target_return_min: Optional[float] = Field(None, ge=0)
     target_return_max: Optional[float] = Field(None, ge=0)
-    target_exchange: str = Field(default="both", pattern=r"^(hyperliquid|bybit|both)$")
+    target_exchange: StrategyExchangeTarget = "all"
 
 
 class StrategyUpdate(BaseModel):
@@ -37,7 +39,7 @@ class StrategyUpdate(BaseModel):
     timeframe: Optional[StrategyTimeframe] = None
     target_return_min: Optional[float] = Field(None, ge=0)
     target_return_max: Optional[float] = Field(None, ge=0)
-    target_exchange: Optional[str] = Field(None, pattern=r"^(hyperliquid|bybit|both)$")
+    target_exchange: Optional[StrategyExchangeTarget] = None
 
 
 class StrategyResponse(BaseModel):
@@ -51,7 +53,7 @@ class StrategyResponse(BaseModel):
     allocation_pct: float
     max_drawdown_percent: float
     is_active: bool
-    target_exchange: str = "both"
+    target_exchange: str = "all"
     daily_loss_cap_percent: Optional[float] = None
     target_volatility: Optional[float] = None
     expected_volatility: Optional[float] = None

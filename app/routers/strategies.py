@@ -56,6 +56,7 @@ async def create_strategy(
         timeframe=data.timeframe,
         target_return_min=data.target_return_min,
         target_return_max=data.target_return_max,
+        target_exchange=data.target_exchange,
     )
     db.add(strategy)
     await db.flush()

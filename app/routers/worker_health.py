@@ -1,6 +1,6 @@
 """Worker health check and manual trigger endpoints (admin-only)."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.middleware.permissions import RequireAdmin, UserPermissions
 
@@ -19,14 +19,32 @@ async def worker_health(
 
 @router.post("/trigger-analysis")
 async def trigger_analysis(
+    exchange: str = Query(default="all", pattern="^(all|hyperliquid|bybit|binance)$"),
     perms: UserPermissions = RequireAdmin,
 ):
-    """Manually trigger the analysis pipeline outside the Beat schedule."""
-    from app.worker.tasks import run_analysis_pipeline
+    """Manually trigger one exchange pipeline, or all exchange pipelines."""
+    from app.worker.tasks import (
+        run_analysis_pipeline,
+        run_binance_analysis_pipeline,
+        run_bybit_analysis_pipeline,
+        run_hyperliquid_analysis_pipeline,
+    )
 
-    result = run_analysis_pipeline.delay()
+    task_map = {
+        "all": run_analysis_pipeline,
+        "hyperliquid": run_hyperliquid_analysis_pipeline,
+        "bybit": run_bybit_analysis_pipeline,
+        "binance": run_binance_analysis_pipeline,
+    }
+    task = task_map.get(exchange)
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported exchange: {exchange}",
+        )
+    result = task.delay()
 
     return {
-        "message": "Analysis pipeline triggered",
+        "message": f"{exchange} analysis pipeline triggered",
         "task_id": result.id,
     }

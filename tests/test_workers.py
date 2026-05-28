@@ -22,6 +22,7 @@ from app.models.enums import (
     WalletType,
 )
 from app.models.admin_config import AdminConfig
+from app.models.binance_signal import BinanceSignal
 from app.models.billing import Plan, Subscription
 from app.models.bybit_signal import BybitSignal
 from app.models.execution import Execution
@@ -136,6 +137,40 @@ async def test_fetch_market_data(setup_db):
     assert result[3]["exchange"] == "binance"
 
 
+@pytest.mark.asyncio
+async def test_fetch_market_data_can_target_single_exchange(setup_db):
+    """Exchange-specific pipelines fetch only their own market data."""
+    from app.worker.tasks import _fetch_market_data_async
+
+    mock_binance = [
+        {"symbol": "ETHUSDT", "price": "3000"},
+    ]
+
+    with (
+        patch(
+            "app.worker.tasks.HyperliquidService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=[{"symbol": "BTC"}],
+        ) as mock_hl,
+        patch(
+            "app.worker.tasks.BybitService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=[{"symbol": "BTCUSDT"}],
+        ) as mock_bybit,
+        patch(
+            "app.worker.tasks.BinanceService.get_top_movers",
+            new_callable=AsyncMock,
+            return_value=mock_binance,
+        ) as mock_binance_fetch,
+    ):
+        result = await _fetch_market_data_async(exchange="binance")
+
+    assert result == [{"symbol": "ETHUSDT", "price": "3000", "exchange": "binance"}]
+    mock_hl.assert_not_awaited()
+    mock_bybit.assert_not_awaited()
+    mock_binance_fetch.assert_awaited_once()
+
+
 # ── Test: Get Active Strategy IDs ──────────────────────────────────
 
 
@@ -182,6 +217,86 @@ async def test_generate_signals_creates_signals(setup_db):
     assert len(result) == 1
     assert result[0]["id"] == str(mock_signal.id)
     assert result[0]["exchange"] == "hyperliquid"
+
+
+@pytest.mark.asyncio
+async def test_generate_signals_preserves_exchange_for_bybit_and_binance(setup_db):
+    """_generate_signals_async returns exchange metadata for non-HL signal tables."""
+    from app.worker.tasks import _generate_signals_async
+
+    bybit_signal = BybitSignal(
+        id=uuid.uuid4(),
+        symbol="BTCUSDT",
+        direction=SignalDirection.SELL,
+        confidence=0.91,
+        entry_price=Decimal("65000"),
+        take_profit=Decimal("63000"),
+        stop_loss=Decimal("67000"),
+        status=SignalStatus.NEW,
+    )
+    binance_signal = BinanceSignal(
+        id=uuid.uuid4(),
+        symbol="ETHUSDT",
+        direction=SignalDirection.SELL,
+        confidence=0.92,
+        entry_price=Decimal("3000"),
+        take_profit=Decimal("2850"),
+        stop_loss=Decimal("3060"),
+        status=SignalStatus.NEW,
+    )
+
+    with (
+        patch(
+            "app.worker.tasks.async_session_factory",
+            TestSessionFactory,
+        ),
+        patch(
+            "app.worker.tasks.AIEngineService.generate_signals",
+            new_callable=AsyncMock,
+            return_value=[bybit_signal, binance_signal],
+        ),
+    ):
+        result = await _generate_signals_async(
+            [
+                {"symbol": "BTCUSDT", "exchange": "bybit"},
+                {"symbol": "ETHUSDT", "exchange": "binance"},
+            ]
+        )
+
+    assert result == [
+        {"id": str(bybit_signal.id), "exchange": "bybit"},
+        {"id": str(binance_signal.id), "exchange": "binance"},
+    ]
+
+
+def test_strategy_target_matching_includes_binance_and_legacy_both():
+    """Binance signals must not be skipped by legacy all-exchange targets."""
+    from app.worker.tasks import _strategy_targets_exchange
+
+    strategy = MagicMock()
+
+    strategy.target_exchange = "binance"
+    assert _strategy_targets_exchange(strategy, "binance") is True
+    assert _strategy_targets_exchange(strategy, "bybit") is False
+
+    strategy.target_exchange = "both"
+    assert _strategy_targets_exchange(strategy, "hyperliquid") is True
+    assert _strategy_targets_exchange(strategy, "bybit") is True
+    assert _strategy_targets_exchange(strategy, "binance") is True
+
+    strategy.target_exchange = "all"
+    assert _strategy_targets_exchange(strategy, "binance") is True
+
+
+def test_admin_task_definitions_expose_exchange_pipelines():
+    """Admin task toggles must expose each exchange pipeline independently."""
+    from app.routers.admin.system import TASK_DEFINITIONS
+
+    task_names = {task["name"] for task in TASK_DEFINITIONS}
+
+    assert "analysis-pipeline-hyperliquid" in task_names
+    assert "analysis-pipeline-bybit" in task_names
+    assert "analysis-pipeline-binance" in task_names
 
 
 @pytest.mark.asyncio

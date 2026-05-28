@@ -78,9 +78,10 @@ class Strategy(Base, TimestampMixin):
         Float, nullable=True, default=None
     )
 
-    # Exchange targeting: "hyperliquid", "bybit", or "both" (default)
+    # Exchange targeting: "hyperliquid", "bybit", "binance", "both", or "all".
+    # "both" is kept as a legacy alias for all exchanges.
     target_exchange: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="both", server_default="both"
+        String(20), nullable=False, default="all", server_default="both"
     )
 
     # Auto-pause tracking

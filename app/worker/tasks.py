@@ -50,6 +50,25 @@ from app.worker.async_runner import run_async
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+ALL_EXCHANGE_TARGETS = {"all", "both", "*", "any"}
+EXCHANGE_PIPELINE_TASKS = {
+    Exchange.HYPERLIQUID.value: "analysis-pipeline-hyperliquid",
+    Exchange.BYBIT.value: "analysis-pipeline-bybit",
+    Exchange.BINANCE.value: "analysis-pipeline-binance",
+}
+
+
+def _strategy_targets_exchange(strategy: Strategy, exchange: str) -> bool:
+    """Return whether a strategy should receive a signal for this exchange.
+
+    "both" is a legacy value that originally meant Hyperliquid + Bybit.  After
+    Binance support was added, existing "both" strategies need to continue
+    receiving every exchange unless a user chooses a single-exchange target.
+    """
+    target = str(getattr(strategy, "target_exchange", "all") or "all").lower()
+    exchange = str(exchange).lower()
+    return target in ALL_EXCHANGE_TARGETS or target == exchange
+
 
 async def _is_task_disabled(task_name: str) -> bool:
     """Check if a scheduled task is disabled via admin_config."""
@@ -67,60 +86,83 @@ async def _is_task_disabled(task_name: str) -> bool:
     return False
 
 
+async def _is_exchange_pipeline_disabled(exchange: str) -> bool:
+    """Check whether this exchange pipeline is disabled.
+
+    The old aggregate "analysis-pipeline" flag still disables all exchange
+    pipelines for conservative backward compatibility after deployment.
+    """
+    task_name = EXCHANGE_PIPELINE_TASKS[exchange]
+    return await _is_task_disabled(task_name) or await _is_task_disabled(
+        "analysis-pipeline"
+    )
+
+
 # ── Async Pipeline Functions ─────────────────────────────────────
 
 
-async def _fetch_market_data_async() -> list[dict]:
-    """Fetch market data from Hyperliquid, Bybit, and Binance; merge and return."""
+async def _fetch_market_data_async(exchange: str | None = None) -> list[dict]:
+    """Fetch market data for one exchange, or all exchanges when omitted."""
     from app.services.dynamic_config import get_config
 
     import asyncio
+
+    requested_exchange = str(exchange).lower() if exchange else None
+    valid_exchanges = {e.value for e in Exchange}
+    if requested_exchange is not None and requested_exchange not in valid_exchanges:
+        raise ValueError(f"Unsupported exchange for market data: {exchange}")
 
     hl_limit = await get_config("hl_symbols_limit", 4)
     bybit_limit = await get_config("bybit_symbols_limit", 6)
     binance_limit = await get_config("binance_symbols_limit", 6)
 
-    hl_service = HyperliquidService()
-    bybit_service = BybitService()
-    binance_service = BinanceService()
+    fetch_specs = []
+    if requested_exchange in (None, Exchange.HYPERLIQUID.value):
+        fetch_specs.append(
+            (
+                Exchange.HYPERLIQUID.value,
+                "Hyperliquid",
+                HyperliquidService().get_top_movers(limit=hl_limit),
+            )
+        )
+    if requested_exchange in (None, Exchange.BYBIT.value):
+        fetch_specs.append(
+            (
+                Exchange.BYBIT.value,
+                "Bybit",
+                BybitService().get_top_movers(limit=bybit_limit),
+            )
+        )
+    if requested_exchange in (None, Exchange.BINANCE.value):
+        fetch_specs.append(
+            (
+                Exchange.BINANCE.value,
+                "Binance",
+                BinanceService().get_top_movers(limit=binance_limit),
+            )
+        )
 
-    hl_task = hl_service.get_top_movers(limit=hl_limit)
-    bybit_task = bybit_service.get_top_movers(limit=bybit_limit)
-    binance_task = binance_service.get_top_movers(limit=binance_limit)
-
-    hl_results, bybit_results, binance_results = await asyncio.gather(
-        hl_task, bybit_task, binance_task, return_exceptions=True
+    fetch_results = await asyncio.gather(
+        *(spec[2] for spec in fetch_specs), return_exceptions=True
     )
 
     symbols: list[dict] = []
 
-    if isinstance(hl_results, list):
-        for s in hl_results:
-            s["exchange"] = Exchange.HYPERLIQUID.value
-        symbols.extend(hl_results)
-        logger.info("Fetched %d symbols from Hyperliquid", len(hl_results))
-    else:
-        logger.error("Hyperliquid fetch failed: %s", hl_results)
-
-    if isinstance(bybit_results, list):
-        for s in bybit_results:
-            s["exchange"] = Exchange.BYBIT.value
-        symbols.extend(bybit_results)
-        logger.info("Fetched %d symbols from Bybit", len(bybit_results))
-    else:
-        logger.error("Bybit fetch failed: %s", bybit_results)
-
-    if isinstance(binance_results, list):
-        for s in binance_results:
-            s["exchange"] = Exchange.BINANCE.value
-        symbols.extend(binance_results)
-        logger.info("Fetched %d symbols from Binance", len(binance_results))
-    else:
-        logger.error("Binance fetch failed: %s", binance_results)
+    for (exchange_value, exchange_label, _task), result in zip(
+        fetch_specs, fetch_results
+    ):
+        if isinstance(result, list):
+            for s in result:
+                s["exchange"] = exchange_value
+            symbols.extend(result)
+            logger.info("Fetched %d symbols from %s", len(result), exchange_label)
+        else:
+            logger.error("%s fetch failed: %s", exchange_label, result)
 
     logger.info(
-        "Total %d symbols from all exchanges: %s",
+        "Total %d symbols from %s: %s",
         len(symbols),
+        requested_exchange or "all exchanges",
         ", ".join(
             f"{s.get('symbol', '?')}({s.get('exchange', '?')})" for s in symbols[:10]
         ),
@@ -246,8 +288,8 @@ async def _execute_signal_for_strategy_async(
             user = strategy.user
 
             # Check strategy targets this exchange
-            target = getattr(strategy, "target_exchange", "both")
-            if target != "both" and target != exchange:
+            target = getattr(strategy, "target_exchange", "all")
+            if not _strategy_targets_exchange(strategy, exchange):
                 return {
                     "status": "skipped",
                     "reason": f"Strategy targets {target}, signal is {exchange}",
@@ -482,6 +524,181 @@ def execute_signal_task(
             exc_info=True,
         )
         raise self.retry(exc=exc)
+
+
+def _run_analysis_pipeline_for_exchange(exchange: str) -> dict:
+    """Orchestrator: runs the analysis + execution pipeline for one exchange."""
+    exchange = str(exchange).lower()
+    pipeline_id = str(uuid.uuid4())[:8]
+    logger.info("[Pipeline %s] Starting %s analysis pipeline", pipeline_id, exchange)
+
+    # Stage 1: Fetch market data for this exchange only
+    market_data = run_async(_fetch_market_data_async(exchange=exchange))
+
+    if not market_data:
+        logger.warning(
+            "[Pipeline %s] No %s market data available",
+            pipeline_id,
+            exchange,
+        )
+        return {
+            "pipeline_id": pipeline_id,
+            "exchange": exchange,
+            "status": "completed",
+            "market_data_count": 0,
+            "signals_generated": 0,
+            "strategies_processed": 0,
+            "executions_attempted": 0,
+        }
+
+    # Stage 2: Generate signals (strategy-independent)
+    signal_ids = run_async(_generate_signals_async(market_data))
+
+    logger.info(
+        "[Pipeline %s] Generated %d %s signals from %d symbols",
+        pipeline_id,
+        len(signal_ids),
+        exchange,
+        len(market_data),
+    )
+
+    if not signal_ids:
+        return {
+            "pipeline_id": pipeline_id,
+            "exchange": exchange,
+            "status": "completed",
+            "market_data_count": len(market_data),
+            "signals_generated": 0,
+            "strategies_processed": 0,
+            "executions_attempted": 0,
+        }
+
+    # Stage 3: Get all active strategies
+    active_strategy_ids = run_async(_get_active_strategy_ids_async())
+
+    if not active_strategy_ids:
+        logger.info("[Pipeline %s] No active strategies found", pipeline_id)
+        return {
+            "pipeline_id": pipeline_id,
+            "exchange": exchange,
+            "status": "completed",
+            "market_data_count": len(market_data),
+            "signals_generated": len(signal_ids),
+            "strategies_processed": 0,
+            "executions_attempted": 0,
+        }
+
+    logger.info(
+        "[Pipeline %s] Executing %d %s signals across %d strategies",
+        pipeline_id,
+        len(signal_ids),
+        exchange,
+        len(active_strategy_ids),
+    )
+
+    total_executions = 0
+
+    for strategy_id in active_strategy_ids:
+        for sig_info in signal_ids:
+            sig_id = sig_info["id"] if isinstance(sig_info, dict) else sig_info
+            sig_exchange = (
+                sig_info.get("exchange", exchange) if isinstance(sig_info, dict) else exchange
+            )
+            try:
+                result = run_async(
+                    _execute_signal_for_strategy_async(
+                        sig_id, strategy_id, exchange=sig_exchange
+                    )
+                )
+                if result.get("status") in ("filled", "FILLED"):
+                    total_executions += 1
+                logger.info(
+                    "[Pipeline %s] Signal %s(%s) / Strategy %s: %s",
+                    pipeline_id,
+                    sig_id,
+                    sig_exchange,
+                    strategy_id,
+                    result,
+                )
+            except Exception as exc:
+                logger.error(
+                    "[Pipeline %s] Execution failed for signal %s strategy %s: %s",
+                    pipeline_id,
+                    sig_id,
+                    strategy_id,
+                    exc,
+                )
+                continue
+
+    summary = {
+        "pipeline_id": pipeline_id,
+        "exchange": exchange,
+        "status": "completed",
+        "market_data_count": len(market_data),
+        "signals_generated": len(signal_ids),
+        "strategies_processed": len(active_strategy_ids),
+        "executions_attempted": total_executions,
+    }
+    logger.info("[Pipeline %s] %s pipeline completed: %s", pipeline_id, exchange, summary)
+    return summary
+
+
+def _run_exchange_pipeline_task(self, exchange: str) -> dict:
+    task_name = EXCHANGE_PIPELINE_TASKS[exchange]
+    if run_async(_is_exchange_pipeline_disabled(exchange)):
+        logger.info("%s task is disabled, skipping", task_name)
+        return {"status": "disabled", "exchange": exchange}
+
+    try:
+        return _run_analysis_pipeline_for_exchange(exchange)
+    except SoftTimeLimitExceeded:
+        logger.error("%s hit soft time limit", task_name)
+        raise
+    except Exception as exc:
+        logger.error("%s failed: %s", task_name, exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    name="app.worker.tasks.run_hyperliquid_analysis_pipeline",
+    bind=True,
+    max_retries=1,
+    soft_time_limit=settings.celery_task_soft_time_limit,
+    time_limit=settings.celery_task_time_limit,
+    acks_late=True,
+    track_started=True,
+)
+def run_hyperliquid_analysis_pipeline(self) -> dict:
+    """Run the Hyperliquid analysis + execution pipeline."""
+    return _run_exchange_pipeline_task(self, Exchange.HYPERLIQUID.value)
+
+
+@shared_task(
+    name="app.worker.tasks.run_bybit_analysis_pipeline",
+    bind=True,
+    max_retries=1,
+    soft_time_limit=settings.celery_task_soft_time_limit,
+    time_limit=settings.celery_task_time_limit,
+    acks_late=True,
+    track_started=True,
+)
+def run_bybit_analysis_pipeline(self) -> dict:
+    """Run the Bybit analysis + execution pipeline."""
+    return _run_exchange_pipeline_task(self, Exchange.BYBIT.value)
+
+
+@shared_task(
+    name="app.worker.tasks.run_binance_analysis_pipeline",
+    bind=True,
+    max_retries=1,
+    soft_time_limit=settings.celery_task_soft_time_limit,
+    time_limit=settings.celery_task_time_limit,
+    acks_late=True,
+    track_started=True,
+)
+def run_binance_analysis_pipeline(self) -> dict:
+    """Run the Binance analysis + execution pipeline."""
+    return _run_exchange_pipeline_task(self, Exchange.BINANCE.value)
 
 
 @shared_task(

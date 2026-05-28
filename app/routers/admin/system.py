@@ -14,6 +14,8 @@ from app.db.base import get_db
 from app.middleware.audit import log_audit
 from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.admin_config import AdminConfig
+from app.models.binance_signal import BinanceSignal
+from app.models.bybit_signal import BybitSignal
 from app.models.enums import ExecutionStatus
 from app.models.execution import Execution
 from app.models.signal import Signal
@@ -77,11 +79,25 @@ LOG_PATHS = {
 # Task definitions matching celery_app.py beat_schedule
 TASK_DEFINITIONS = [
     {
-        "name": "analysis-pipeline",
-        "task": "app.worker.tasks.run_analysis_pipeline",
+        "name": "analysis-pipeline-hyperliquid",
+        "task": "app.worker.tasks.run_hyperliquid_analysis_pipeline",
         "schedule": "Every 2 hours",
         "queue": "analysis",
-        "description": "Fetch market data, generate AI signals, execute across strategies",
+        "description": "Hyperliquid: fetch market data, generate AI signals, execute across strategies",
+    },
+    {
+        "name": "analysis-pipeline-bybit",
+        "task": "app.worker.tasks.run_bybit_analysis_pipeline",
+        "schedule": "Every 2 hours",
+        "queue": "analysis",
+        "description": "Bybit: fetch market data, generate AI signals, execute across strategies",
+    },
+    {
+        "name": "analysis-pipeline-binance",
+        "task": "app.worker.tasks.run_binance_analysis_pipeline",
+        "schedule": "Every 2 hours",
+        "queue": "analysis",
+        "description": "Binance: fetch market data, generate AI signals, execute across strategies",
     },
     {
         "name": "monitor-positions",
@@ -143,11 +159,18 @@ async def pipeline_status(db: AsyncSession = Depends(get_db)):
     """Return current pipeline run status and daily counters."""
     now = utc_now()
 
-    last_signal_at = (
-        await db.execute(
-            select(Signal.created_at).order_by(Signal.created_at.desc()).limit(1)
-        )
-    ).scalar()
+    last_signal_dates = []
+    for signal_model in (Signal, BybitSignal, BinanceSignal):
+        last_created = (
+            await db.execute(
+                select(signal_model.created_at)
+                .order_by(signal_model.created_at.desc())
+                .limit(1)
+            )
+        ).scalar()
+        if last_created:
+            last_signal_dates.append(last_created)
+    last_signal_at = max(last_signal_dates) if last_signal_dates else None
 
     last_execution_at = (
         await db.execute(
@@ -155,13 +178,16 @@ async def pipeline_status(db: AsyncSession = Depends(get_db)):
         )
     ).scalar()
 
-    total_signals_today = (
-        await db.execute(
-            select(func.count(Signal.id)).where(
-                func.date(Signal.created_at) == func.date(now)
+    total_signals_today = 0
+    for signal_model in (Signal, BybitSignal, BinanceSignal):
+        count = (
+            await db.execute(
+                select(func.count(signal_model.id)).where(
+                    func.date(signal_model.created_at) == func.date(now)
+                )
             )
-        )
-    ).scalar() or 0
+        ).scalar() or 0
+        total_signals_today += count
 
     total_executions_today = (
         await db.execute(
@@ -291,14 +317,17 @@ async def list_tasks(db: AsyncSession = Depends(get_db)):
     disabled_tasks: list[str] = config.value.get("tasks", []) if config else []
 
     tasks = []
+    legacy_analysis_disabled = "analysis-pipeline" in disabled_tasks
     for td in TASK_DEFINITIONS:
+        is_exchange_pipeline = td["name"].startswith("analysis-pipeline-")
         tasks.append(
             TaskInfo(
                 name=td["name"],
                 task=td["task"],
                 schedule=td["schedule"],
                 queue=td["queue"],
-                enabled=td["name"] not in disabled_tasks,
+                enabled=td["name"] not in disabled_tasks
+                and not (is_exchange_pipeline and legacy_analysis_disabled),
                 description=td["description"],
             )
         )
@@ -341,9 +370,12 @@ async def toggle_task(
 
     disabled: list[str] = config.value.get("tasks", [])
 
-    if body.enabled and task_name in disabled:
-        disabled.remove(task_name)
-    elif not body.enabled and task_name not in disabled:
+    if body.enabled:
+        if task_name in disabled:
+            disabled.remove(task_name)
+        if task_name.startswith("analysis-pipeline-") and "analysis-pipeline" in disabled:
+            disabled.remove("analysis-pipeline")
+    elif task_name not in disabled:
         disabled.append(task_name)
 
     # Must reassign to trigger SQLAlchemy dirty tracking on JSON column

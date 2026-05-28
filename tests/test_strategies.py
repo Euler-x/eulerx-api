@@ -17,12 +17,14 @@ async def test_create_strategy(client, test_user):
             "leverage_limit": 2.0,
             "max_positions": 5,
             "max_drawdown_percent": 10.0,
+            "target_exchange": "binance",
         },
     )
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "My Test Strategy"
     assert data["strategy_type"] == "moderate"
+    assert data["target_exchange"] == "binance"
     assert data["is_active"] is False
 
 

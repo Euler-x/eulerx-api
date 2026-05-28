@@ -10,6 +10,7 @@ from app.models.enums import (
     SubscriptionStatus,
     WalletType,
 )
+from app.models.schemas.strategy import StrategyExchangeTarget
 
 
 # ── Existing ───────────────────────────────────────────────────
@@ -77,6 +78,7 @@ class AdminStrategyUpdate(BaseModel):
     allocation_pct: Optional[float] = Field(None, ge=1.0, le=100.0)
     max_drawdown_percent: Optional[float] = Field(None, gt=0, le=100)
     is_active: Optional[bool] = None
+    target_exchange: Optional[StrategyExchangeTarget] = None
 
 
 # ── Ambassador Admin ───────────────────────────────────────────
