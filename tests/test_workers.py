@@ -936,6 +936,12 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
     from app.services.ate import ATEService, ate_rate_limiter
 
     ate_rate_limiter._requests.clear()
+    mock_hyperliquid_api["place_order"].return_value = {
+        "success": True,
+        "tx_hash": "0x" + "a" * 64,
+        "avg_price": 50012.5,
+        "executed_qty": 0.05,
+    }
 
     user_id = uuid.uuid4()
     strategy_id = uuid.uuid4()
@@ -1016,6 +1022,8 @@ async def test_execute_signal_full_flow(setup_db, mock_hyperliquid_api):
     assert execution is not None
     assert execution.status == ExecutionStatus.FILLED
     assert execution.direction == SignalDirection.BUY
+    assert float(execution.entry_price) == pytest.approx(50012.5)
+    assert float(execution.quantity) == pytest.approx(0.05)
 
 
 @pytest.mark.asyncio

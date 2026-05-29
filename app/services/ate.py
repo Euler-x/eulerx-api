@@ -1103,6 +1103,14 @@ class ATEService:
             if order_result.get("success"):
                 execution.status = ExecutionStatus.FILLED
                 execution.tx_hash = str(order_result.get("tx_hash", ""))
+                avg_price = float(order_result.get("avg_price", 0) or 0)
+                executed_qty = float(order_result.get("executed_qty", 0) or 0)
+                if avg_price > 0:
+                    execution.entry_price = avg_price
+                    entry_price = avg_price
+                if executed_qty > 0:
+                    execution.quantity = executed_qty
+                    quantity = executed_qty
                 execution.executed_at = utc_now()
             else:
                 execution.status = ExecutionStatus.FAILED

@@ -799,15 +799,18 @@ class HyperliquidService:
 
             # Extract order ID from response
             oid = None
+            avg_price = 0.0
+            executed_qty = 0.0
             response = order_result.get("response", {})
             if isinstance(response, dict):
                 statuses = response.get("data", {}).get("statuses", [])
                 if statuses:
                     first = statuses[0]
                     if isinstance(first, dict):
-                        oid = first.get("resting", {}).get("oid") or first.get(
-                            "filled", {}
-                        ).get("oid")
+                        filled = first.get("filled", {})
+                        oid = first.get("resting", {}).get("oid") or filled.get("oid")
+                        avg_price = float(filled.get("avgPx", 0) or 0)
+                        executed_qty = float(filled.get("totalSz", 0) or 0)
                         if "error" in first:
                             logger.error(
                                 "HyperLiquid order rejected: %s",
@@ -834,6 +837,8 @@ class HyperliquidService:
                 "data": order_result,
                 "tx_hash": tx_hash,
                 "oid": oid,
+                "avg_price": avg_price,
+                "executed_qty": executed_qty,
             }
 
         except ImportError:

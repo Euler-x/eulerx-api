@@ -12,19 +12,90 @@ from sqlalchemy.orm import selectinload
 from app.db.base import get_db
 from app.middleware.audit import log_audit
 from app.middleware.permissions import RequireAdmin, UserPermissions
-from app.models.enums import ExecutionStatus, SignalDirection
+from app.models.enums import Exchange, ExecutionStatus, SignalDirection
 from app.models.execution import Execution
 from app.models.schemas.common import PaginatedResponse
 from app.models.schemas.execution import CloseExecutionResponse, ExecutionResponse
+from app.services.binance import BinanceService
+from app.services.bybit import BybitService
+from app.services.hyperliquid import HyperliquidService
+from app.utils.security import decrypt_private_key
 
 router = APIRouter()
+
+
+def _execution_symbol(ex: Execution) -> str | None:
+    signal = ex.signal or ex.bybit_signal or ex.binance_signal
+    return signal.symbol if signal is not None else None
 
 
 def _exec_response(ex: Execution) -> ExecutionResponse:
     """Build ExecutionResponse with user_email from loaded relationship."""
     resp = ExecutionResponse.model_validate(ex)
+    resp.symbol = _execution_symbol(ex)
     if ex.user is not None:
         resp.user_email = ex.user.email
+    return resp
+
+
+async def _exec_response_with_live_position(ex: Execution) -> ExecutionResponse:
+    """Build an admin response enriched with exchange-native open-position data."""
+    resp = _exec_response(ex)
+    symbol = resp.symbol
+    user = ex.user
+    if (
+        symbol is None
+        or user is None
+        or ex.status != ExecutionStatus.FILLED
+        or ex.exit_price is not None
+    ):
+        return resp
+
+    position: dict | None = None
+    exchange = getattr(ex, "exchange", Exchange.HYPERLIQUID)
+
+    try:
+        if exchange == Exchange.BINANCE and user.binance_configured:
+            api_key = decrypt_private_key(user.binance_api_key_encrypted)
+            api_secret = decrypt_private_key(user.binance_api_secret_encrypted)
+            service = BinanceService(testnet=getattr(user, "binance_testnet", False))
+            position = (await service.get_user_positions(api_key, api_secret)).get(
+                symbol
+            )
+        elif exchange == Exchange.BYBIT and user.bybit_configured:
+            api_key = decrypt_private_key(user.bybit_api_key_encrypted)
+            api_secret = decrypt_private_key(user.bybit_api_secret_encrypted)
+            service = BybitService(testnet=getattr(user, "bybit_testnet", False))
+            position = (await service.get_user_positions(api_key, api_secret)).get(
+                symbol
+            )
+        elif exchange == Exchange.HYPERLIQUID and user.wallet_address:
+            service = HyperliquidService()
+            position = (await service.get_user_positions(user.wallet_address)).get(
+                symbol
+            )
+            if position is not None and not position.get("mark_price"):
+                mids = await service.get_all_mids()
+                mid = mids.get(symbol)
+                if mid is not None:
+                    position["mark_price"] = float(mid)
+    except Exception:
+        # Live position enrichment is best-effort. The stored execution data
+        # should still render even when an exchange is temporarily unavailable.
+        return resp
+
+    if position is None:
+        return resp
+
+    live_entry = float(position.get("entry_px") or 0)
+    mark_price = float(position.get("mark_price") or 0)
+    live_pnl = float(position.get("unrealized_pnl") or 0)
+
+    if live_entry > 0:
+        resp.live_entry_price = live_entry
+    if mark_price > 0:
+        resp.mark_price = mark_price
+    resp.live_pnl = live_pnl
     return resp
 
 
@@ -40,7 +111,12 @@ async def admin_list_executions(
 ):
     query = (
         select(Execution)
-        .options(selectinload(Execution.user))
+        .options(
+            selectinload(Execution.user),
+            selectinload(Execution.signal),
+            selectinload(Execution.bybit_signal),
+            selectinload(Execution.binance_signal),
+        )
         .order_by(Execution.created_at.desc())
     )
     count_query = select(func.count(Execution.id))
@@ -62,9 +138,10 @@ async def admin_list_executions(
     offset = (page - 1) * page_size
     result = await db.execute(query.offset(offset).limit(page_size))
     executions = result.scalars().all()
+    items = [await _exec_response_with_live_position(e) for e in executions]
 
     return PaginatedResponse(
-        items=[_exec_response(e) for e in executions],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
@@ -77,11 +154,20 @@ async def admin_get_execution(
     execution_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Execution).where(Execution.id == execution_id))
+    result = await db.execute(
+        select(Execution)
+        .options(
+            selectinload(Execution.user),
+            selectinload(Execution.signal),
+            selectinload(Execution.bybit_signal),
+            selectinload(Execution.binance_signal),
+        )
+        .where(Execution.id == execution_id)
+    )
     execution = result.scalar_one_or_none()
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")
-    return ExecutionResponse.model_validate(execution)
+    return await _exec_response_with_live_position(execution)
 
 
 @router.post("/executions/{execution_id}/close", response_model=CloseExecutionResponse)
