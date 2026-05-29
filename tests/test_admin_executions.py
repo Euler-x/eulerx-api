@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import delete
 
 from app.models.enums import (
     ExecutionStatus,
@@ -111,3 +112,10 @@ async def test_admin_executions_include_live_position_values(
     assert item["live_entry_price"] == pytest.approx(50123.45)
     assert item["mark_price"] == pytest.approx(50246.85)
     assert item["live_pnl"] == pytest.approx(12.34)
+
+    async with TestSessionFactory() as session:
+        await session.execute(delete(Execution).where(Execution.id == execution_id))
+        await session.execute(delete(Signal).where(Signal.id == signal_id))
+        await session.execute(delete(Strategy).where(Strategy.id == strategy_id))
+        await session.execute(delete(User).where(User.id == user_id))
+        await session.commit()
