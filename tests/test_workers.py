@@ -299,6 +299,30 @@ def test_admin_task_definitions_expose_exchange_pipelines():
     assert "analysis-pipeline-binance" in task_names
 
 
+def test_exchange_pipeline_schedules_are_staggered():
+    """Exchange pipelines should not all burst AI analysis at the same minute."""
+    from app.worker.celery_app import celery_app
+
+    beat_schedule = celery_app.conf.beat_schedule
+    exchange_minutes = {
+        "hyperliquid": beat_schedule["hyperliquid-analysis-pipeline-every-2h"][
+            "schedule"
+        ]._orig_minute,
+        "bybit": beat_schedule["bybit-analysis-pipeline-every-2h"][
+            "schedule"
+        ]._orig_minute,
+        "binance": beat_schedule["binance-analysis-pipeline-every-2h"][
+            "schedule"
+        ]._orig_minute,
+    }
+
+    assert exchange_minutes == {
+        "hyperliquid": "0",
+        "bybit": "20",
+        "binance": "40",
+    }
+
+
 @pytest.mark.asyncio
 async def test_generate_signals_returns_empty_on_no_actionable(setup_db):
     """Returns empty list when AI engine finds no actionable signals."""

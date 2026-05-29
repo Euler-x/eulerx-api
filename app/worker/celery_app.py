@@ -91,7 +91,7 @@ celery_app.conf.update(
         "bybit-analysis-pipeline-every-2h": {
             "task": "app.worker.tasks.run_bybit_analysis_pipeline",
             "schedule": crontab(
-                minute="0",
+                minute="20",
                 hour=f"*/{settings.analysis_schedule_hours}",
             ),
             "options": {
@@ -102,7 +102,7 @@ celery_app.conf.update(
         "binance-analysis-pipeline-every-2h": {
             "task": "app.worker.tasks.run_binance_analysis_pipeline",
             "schedule": crontab(
-                minute="0",
+                minute="40",
                 hour=f"*/{settings.analysis_schedule_hours}",
             ),
             "options": {
