@@ -463,7 +463,10 @@ class AIEngineService:
             return None
 
         sl_distance_pct = self._distance_pct(stop_loss, entry)
-        if sl_distance_pct < MIN_SL_DISTANCE_PCT or sl_distance_pct > MAX_SL_DISTANCE_PCT:
+        if (
+            sl_distance_pct < MIN_SL_DISTANCE_PCT
+            or sl_distance_pct > MAX_SL_DISTANCE_PCT
+        ):
             logger.info(
                 "Skipping %s: normalized SL distance %.2f%% outside %.1f%%-%.1f%%",
                 symbol,
