@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import timedelta
+from statistics import median
 
 import httpx
 from sqlalchemy import select
@@ -16,6 +17,10 @@ from app.utils.helpers import calculate_risk_reward_ratio, utc_now
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+MIN_SL_DISTANCE_PCT = 0.5
+MAX_SL_DISTANCE_PCT = 2.0
+MIN_RISK_REWARD_RATIO = 2.5
 
 
 ANALYSIS_PROMPT_TEMPLATE = """You are a professional crypto perpetual futures trader on {exchange_name}. Your #1 priority is capital preservation — you only take trades with a clear structural edge.
@@ -316,6 +321,170 @@ class AIEngineService:
 
         return valid_results
 
+    @staticmethod
+    def _to_float(value: object, default: float | None = None) -> float | None:
+        try:
+            if value is None:
+                return default
+            parsed = float(value)
+            return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _median_price(cls, responses: list[dict], key: str) -> float:
+        prices = [
+            price
+            for price in (cls._to_float(resp.get(key)) for resp in responses)
+            if price is not None
+        ]
+        return float(median(prices)) if prices else 0.0
+
+    @classmethod
+    def _reference_price(cls, market_data: dict, candle_summary: dict) -> float:
+        for key in ("mid_price", "last_price", "mark_price", "price"):
+            price = cls._to_float(market_data.get(key))
+            if price is not None:
+                return price
+        return cls._to_float(candle_summary.get("close_latest"), 0.0) or 0.0
+
+    @staticmethod
+    def _distance_pct(price: float, reference: float) -> float:
+        if reference <= 0:
+            return 0.0
+        return abs(price - reference) / reference * 100
+
+    @staticmethod
+    def _valid_price_stack(
+        direction: SignalDirection, entry: float, stop_loss: float, take_profit: float
+    ) -> bool:
+        if entry <= 0 or stop_loss <= 0 or take_profit <= 0:
+            return False
+        if direction == SignalDirection.BUY:
+            return stop_loss < entry < take_profit
+        if direction == SignalDirection.SELL:
+            return take_profit < entry < stop_loss
+        return False
+
+    def _normalize_signal_prices(
+        self,
+        *,
+        symbol: str,
+        direction: SignalDirection,
+        market_data: dict,
+        candle_summary: dict,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+    ) -> tuple[float, float, float, float] | None:
+        """Anchor market-order suggestions to live price and enforce structure.
+
+        The model is still responsible for directional analysis. Price levels are
+        normalized here because averaging multiple model outputs can move TP/SL
+        away from the actual 15m/5m structure that execution depends on.
+        """
+        reference = self._reference_price(market_data, candle_summary)
+        if reference <= 0:
+            logger.info("Skipping %s: no reference price for TP/SL validation", symbol)
+            return None
+
+        entry = entry_price if entry_price > 0 else reference
+        if self._distance_pct(entry, reference) > 0.75:
+            logger.info(
+                "Normalizing %s entry from %.8f to current market %.8f",
+                symbol,
+                entry,
+                reference,
+            )
+            entry = reference
+
+        atr_pct = self._to_float(candle_summary.get("ltf_5m_atr_pct"), 1.0) or 1.0
+        sl_padding_pct = min(MAX_SL_DISTANCE_PCT, max(MIN_SL_DISTANCE_PCT, atr_pct))
+        sl_padding = entry * sl_padding_pct / 100
+
+        if direction == SignalDirection.BUY:
+            structural_level = self._to_float(candle_summary.get("ltf_15m_support"))
+            structural_sl = (
+                structural_level - sl_padding
+                if structural_level and structural_level < entry
+                else entry - sl_padding
+            )
+            if stop_loss <= 0 or not stop_loss < entry:
+                stop_loss = structural_sl
+
+            sl_distance_pct = self._distance_pct(stop_loss, entry)
+            if (
+                sl_distance_pct < MIN_SL_DISTANCE_PCT
+                or sl_distance_pct > MAX_SL_DISTANCE_PCT
+            ):
+                stop_loss = entry - sl_padding
+
+            risk = entry - stop_loss
+            min_tp = entry + risk * MIN_RISK_REWARD_RATIO
+            resistance = self._to_float(candle_summary.get("nearest_resistance"))
+            if take_profit <= entry or take_profit < min_tp:
+                take_profit = max(resistance or 0, min_tp)
+
+        elif direction == SignalDirection.SELL:
+            structural_level = self._to_float(candle_summary.get("ltf_15m_resistance"))
+            structural_sl = (
+                structural_level + sl_padding
+                if structural_level and structural_level > entry
+                else entry + sl_padding
+            )
+            if stop_loss <= 0 or not stop_loss > entry:
+                stop_loss = structural_sl
+
+            sl_distance_pct = self._distance_pct(stop_loss, entry)
+            if (
+                sl_distance_pct < MIN_SL_DISTANCE_PCT
+                or sl_distance_pct > MAX_SL_DISTANCE_PCT
+            ):
+                stop_loss = entry + sl_padding
+
+            risk = stop_loss - entry
+            min_tp = entry - risk * MIN_RISK_REWARD_RATIO
+            support = self._to_float(candle_summary.get("nearest_support"))
+            if take_profit <= 0 or take_profit >= entry or take_profit > min_tp:
+                take_profit = min(support or min_tp, min_tp)
+
+        else:
+            return None
+
+        if not self._valid_price_stack(direction, entry, stop_loss, take_profit):
+            logger.info(
+                "Skipping %s: invalid %s price stack entry=%.8f sl=%.8f tp=%.8f",
+                symbol,
+                direction.value,
+                entry,
+                stop_loss,
+                take_profit,
+            )
+            return None
+
+        sl_distance_pct = self._distance_pct(stop_loss, entry)
+        if sl_distance_pct < MIN_SL_DISTANCE_PCT or sl_distance_pct > MAX_SL_DISTANCE_PCT:
+            logger.info(
+                "Skipping %s: normalized SL distance %.2f%% outside %.1f%%-%.1f%%",
+                symbol,
+                sl_distance_pct,
+                MIN_SL_DISTANCE_PCT,
+                MAX_SL_DISTANCE_PCT,
+            )
+            return None
+
+        rr_ratio = calculate_risk_reward_ratio(entry, stop_loss, take_profit)
+        if rr_ratio is None or rr_ratio < MIN_RISK_REWARD_RATIO:
+            logger.info(
+                "Skipping %s: normalized R:R %.2f below %.1f",
+                symbol,
+                rr_ratio or 0,
+                MIN_RISK_REWARD_RATIO,
+            )
+            return None
+
+        return entry, stop_loss, take_profit, rr_ratio
+
     def aggregate_signals(
         self, model_responses: list[dict], candle_summary: dict | None = None
     ) -> dict | None:
@@ -351,19 +520,14 @@ class AIEngineService:
         else:
             return None  # No consensus, HOLD
 
-        # Average the consensus responses
+        # Average confidence, but use median prices so one model cannot drag the
+        # entry/TP/SL away from the consensus structure.
         avg_confidence = sum(
             r.get("confidence", 0.5) for r in consensus_responses
         ) / len(consensus_responses)
-        avg_entry = sum(r.get("entry_price", 0) for r in consensus_responses) / len(
-            consensus_responses
-        )
-        avg_sl = sum(r.get("stop_loss", 0) for r in consensus_responses) / len(
-            consensus_responses
-        )
-        avg_tp = sum(r.get("take_profit", 0) for r in consensus_responses) / len(
-            consensus_responses
-        )
+        avg_entry = self._median_price(consensus_responses, "entry_price")
+        avg_sl = self._median_price(consensus_responses, "stop_loss")
+        avg_tp = self._median_price(consensus_responses, "take_profit")
 
         # ── Phase 5: Confidence penalty when chasing the move ──────────
         if candle_summary:
@@ -510,6 +674,23 @@ class AIEngineService:
                 continue
 
             direction = aggregated["direction"]
+            normalized_prices = self._normalize_signal_prices(
+                symbol=symbol,
+                direction=direction,
+                market_data=symbol_data,
+                candle_summary=candle,
+                entry_price=aggregated["entry_price"],
+                stop_loss=aggregated["stop_loss"],
+                take_profit=aggregated["take_profit"],
+            )
+            if normalized_prices is None:
+                hold_count += 1
+                continue
+            entry, sl, tp, rr = normalized_prices
+            aggregated["entry_price"] = round(entry, 8)
+            aggregated["stop_loss"] = round(sl, 8)
+            aggregated["take_profit"] = round(tp, 8)
+            aggregated["risk_reward_ratio"] = rr
 
             # ── Phase 4: Hard post-generation filters ──────────────────
             change_24h = candle.get("price_change_24h_pct", 0)
@@ -571,10 +752,15 @@ class AIEngineService:
                 hold_count += 1
                 continue
 
-            # Require minimum 2:1 risk:reward ratio
+            # Require the same minimum risk:reward ratio enforced in the prompt.
             rr = aggregated.get("risk_reward_ratio", 0)
-            if rr and rr < 2.0:
-                logger.info("Skipping %s: R:R ratio %.2f below 2.0 minimum", symbol, rr)
+            if rr and rr < MIN_RISK_REWARD_RATIO:
+                logger.info(
+                    "Skipping %s: R:R ratio %.2f below %.1f minimum",
+                    symbol,
+                    rr,
+                    MIN_RISK_REWARD_RATIO,
+                )
                 hold_count += 1
                 continue
 
@@ -594,23 +780,25 @@ class AIEngineService:
                 hold_count += 1
                 continue
 
-            # Reject signals with stop loss too tight (< 0.5%) or too wide (> 3%)
+            # Reject signals with stop loss too tight or too wide for precise entries.
             sl_distance_pct = abs(entry - sl) / entry * 100
-            if sl_distance_pct < 0.5:
+            if sl_distance_pct < MIN_SL_DISTANCE_PCT:
                 logger.info(
                     "Skipping %s: SL too tight (%.2f%% from entry), "
-                    "minimum 0.5%% required",
+                    "minimum %.1f%% required",
                     symbol,
                     sl_distance_pct,
+                    MIN_SL_DISTANCE_PCT,
                 )
                 hold_count += 1
                 continue
-            if sl_distance_pct > 3.0:
+            if sl_distance_pct > MAX_SL_DISTANCE_PCT:
                 logger.info(
                     "Skipping %s: SL too wide (%.2f%% from entry), "
-                    "maximum 3%% — entry not precise enough",
+                    "maximum %.1f%% - entry not precise enough",
                     symbol,
                     sl_distance_pct,
+                    MAX_SL_DISTANCE_PCT,
                 )
                 hold_count += 1
                 continue
