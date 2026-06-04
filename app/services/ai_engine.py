@@ -245,7 +245,6 @@ class AIEngineService:
             exhaustion_summary=exhaustion_lines,
             key_levels=level_lines,
             ltf_entry_summary=ltf_lines,
-            context=json.dumps(market_data, default=str),
         )
 
         try:
@@ -640,14 +639,6 @@ class AIEngineService:
                 len(active_signal_keys),
                 ", ".join(f"{s}({e})" for s, e in sorted(active_signal_keys)),
             )
-
-        # Release the DB connection back to the pool before the AI calls.
-        # AI inference can take 60-120 seconds per batch; holding an idle
-        # asyncpg connection that long causes WinError 121 (Windows TCP semaphore
-        # timeout) and similar OS-level disconnects on other platforms.
-        # SQLAlchemy re-acquires a fresh connection automatically when db.flush()
-        # is called below, so closing here is safe.
-        await db.close()
 
         # Signal lifetime matches pipeline frequency so signals stay live
         # until the next pipeline run can replace them.

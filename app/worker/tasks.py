@@ -1131,9 +1131,35 @@ async def _cleanup_old_data_async() -> dict:
             )
             deleted_signals = result.rowcount
 
+            # Also clean up expired Bybit and Binance signals
+            result_bb = await session.execute(
+                delete(BybitSignal).where(
+                    BybitSignal.status == SignalStatus.EXPIRED,
+                    BybitSignal.created_at < cutoff,
+                )
+            )
+            deleted_bybit = result_bb.rowcount
+
+            result_bn = await session.execute(
+                delete(BinanceSignal).where(
+                    BinanceSignal.status == SignalStatus.EXPIRED,
+                    BinanceSignal.created_at < cutoff,
+                )
+            )
+            deleted_binance = result_bn.rowcount
+
             await session.commit()
-            logger.info("Data cleanup: deleted %d old expired signals", deleted_signals)
-            return {"deleted_signals": deleted_signals}
+            logger.info(
+                "Data cleanup: deleted %d HL, %d Bybit, %d Binance expired signals",
+                deleted_signals,
+                deleted_bybit,
+                deleted_binance,
+            )
+            return {
+                "deleted_hl_signals": deleted_signals,
+                "deleted_bybit_signals": deleted_bybit,
+                "deleted_binance_signals": deleted_binance,
+            }
         except Exception:
             await session.rollback()
             raise

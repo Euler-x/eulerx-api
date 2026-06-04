@@ -23,7 +23,8 @@ class GUID(TypeDecorator):
         if value is not None:
             if isinstance(value, uuid_mod.UUID):
                 return str(value)
-            return str(uuid_mod.UUID(value))
+            uuid_mod.UUID(value)  # validate format
+            return value
         return value
 
     def process_result_value(self, value, dialect):

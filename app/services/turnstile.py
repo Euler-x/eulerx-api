@@ -17,10 +17,15 @@ async def verify_turnstile(token: str, ip: str | None = None) -> None:
     settings = get_settings()
     secret = settings.cf_turnstile_secret_key
 
-    # Skip when no secret key is configured (local dev) or no token was sent
-    # (admin panel, legacy clients, browsers with Turnstile blocked).
-    if not secret or not token:
+    # Skip when no secret key is configured (local dev mode). When secret IS
+    # configured but no token was sent, reject — CAPTCHA is required.
+    if not secret:
         return
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CAPTCHA token is required. Please complete the security check.",
+        )
 
     payload: dict = {"secret": secret, "response": token}
     if ip:

@@ -196,6 +196,8 @@ class BillingService:
                 existing_payment.paid_at = utc_now()
             if webhook_data.get("pay_amount"):
                 existing_payment.amount_crypto = webhook_data.get("pay_amount")
+            if webhook_data.get("price_amount"):
+                existing_payment.amount_usd = webhook_data.get("price_amount")
             if webhook_data.get("pay_currency"):
                 existing_payment.crypto_currency = webhook_data.get("pay_currency")
         else:

@@ -99,7 +99,7 @@ def create_access_token(user_id: str, is_admin: bool = False) -> str:
     )
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user_id: str, is_admin: bool = False) -> str:
     now = time.time()
     expire = now + (settings.jwt_refresh_token_expire_days * 86400)
     payload = {
@@ -107,6 +107,7 @@ def create_refresh_token(user_id: str) -> str:
         "iat": now,
         "exp": expire,
         "type": "refresh",
+        "is_admin": is_admin,
     }
     return jwt.encode(
         payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
@@ -127,6 +128,18 @@ def verify_token(token: str, expected_type: str = "access") -> dict:
         raise ValueError(f"Expected {expected_type} token, got {payload.get('type')}")
 
     return payload
+
+
+# ─── Verification Token Hashing ──────────────────────────
+# Short-lived secrets (email codes, password reset tokens) are hashed
+# with SHA-256 before storage so a database leak does not expose them.
+
+
+
+def hash_verification_token(token: str) -> str:
+    """Hash a short-lived verification code or reset token for secure storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
 
 
 # ─── Wallet Signature Verification ──────────────────────

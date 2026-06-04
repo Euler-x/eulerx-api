@@ -251,7 +251,9 @@ class NotificationService:
         Returns the generated code.
         """
         code = self._generate_code()
-        user.email_verification_code = code
+        from app.utils.security import hash_verification_token
+
+        user.email_verification_code = hash_verification_token(code)
         user.email_verification_expires_at = utc_now() + timedelta(
             minutes=settings.email_verification_expiry_minutes
         )
@@ -274,7 +276,9 @@ class NotificationService:
         Token expires in 30 minutes.
         """
         token = secrets.token_urlsafe(32)
-        user.password_reset_token = token
+        from app.utils.security import hash_verification_token
+
+        user.password_reset_token = hash_verification_token(token)
         user.password_reset_expires_at = utc_now() + timedelta(minutes=30)
         await db.flush()
 

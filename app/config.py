@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "EulerX "
+    app_name: str = "EulerX"
     app_version: str = "0.1.0"
     debug: bool = False
     environment: str = Field(
@@ -157,7 +157,7 @@ class Settings(BaseSettings):
         description="Sender email address for transactional emails",
     )
     zeptomail_from_name: str = Field(
-        default="EulerX ",
+        default="EulerX",
         description="Sender display name for transactional emails",
     )
     email_verification_expiry_minutes: int = Field(

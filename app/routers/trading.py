@@ -2,12 +2,13 @@
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
+from app.middleware.permissions import RequireAdmin, UserPermissions
 from app.models.admin_config import AdminConfig
 from app.services.dynamic_config import CONFIG_DEFAULTS, get_config
 
@@ -79,13 +80,12 @@ async def get_trend_status(db: AsyncSession = Depends(get_db)):
 @router.put("/set-trend")
 async def set_market_trend(
     body: SetTrendRequest,
+    perms: UserPermissions = RequireAdmin,
     db: AsyncSession = Depends(get_db),
 ):
     """Set the active market trend bias (bullish / bearish / neutral)."""
     trend = body.market_trend.lower().strip()
     if trend not in ("bullish", "bearish", "neutral"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail="market_trend must be 'bullish', 'bearish', or 'neutral'",
@@ -99,6 +99,7 @@ async def set_market_trend(
 @router.put("/trend-config")
 async def update_trend_config(
     body: TrendConfigRequest,
+    perms: UserPermissions = RequireAdmin,
     db: AsyncSession = Depends(get_db),
 ):
     """Update advanced trend filter configuration."""

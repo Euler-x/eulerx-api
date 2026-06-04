@@ -471,7 +471,9 @@ async def verify_email(
             detail="Verification code has expired. Please request a new one.",
         )
 
-    if current_user.email_verification_code != request.code:
+    from app.utils.security import hash_verification_token
+
+    if current_user.email_verification_code != hash_verification_token(request.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid verification code.",
@@ -532,8 +534,12 @@ async def reset_password(
     db: AsyncSession = Depends(get_db),
 ):
     """Complete a password reset using the token from the reset email."""
+    from app.utils.security import hash_verification_token
+
     result = await db.execute(
-        select(User).where(User.password_reset_token == request.token)
+        select(User).where(
+            User.password_reset_token == hash_verification_token(request.token)
+        )
     )
     user = result.scalar_one_or_none()
 

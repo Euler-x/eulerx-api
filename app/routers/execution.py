@@ -267,7 +267,7 @@ async def close_execution(
                     "closed_at": None,
                 }
 
-    # ── Bybit ────────────────────────────────────────────────────────────────
+    # ── Binance ──────────────────────────────────────────────────────────────
     elif exchange_name == Exchange.BINANCE:
         if not user.binance_configured:
             raise HTTPException(status_code=400, detail="No Binance account connected.")
