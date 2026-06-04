@@ -102,6 +102,41 @@ CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "label": "Binance Symbols",
         "description": "Number of top movers to analyze from Binance per run.",
     },
+    "binance_performance_guard_enabled": {
+        "value": 1,
+        "type": "int",
+        "category": "Trading",
+        "label": "Binance Performance Guard",
+        "description": "Reject Binance setups when recent closed-trade history shows more SL than TP and negative PnL.",
+    },
+    "binance_performance_guard_min_trades": {
+        "value": 6,
+        "type": "int",
+        "category": "Trading",
+        "label": "Binance Guard Min Trades",
+        "description": "Minimum matching Binance closed trades before the performance guard can block a setup.",
+    },
+    "binance_performance_guard_lookback": {
+        "value": 30,
+        "type": "int",
+        "category": "Trading",
+        "label": "Binance Guard Lookback",
+        "description": "Maximum number of recent matching Binance closed trades used by the performance guard.",
+    },
+    "binance_performance_guard_min_win_rate": {
+        "value": 0.45,
+        "type": "float",
+        "category": "Trading",
+        "label": "Binance Guard Min Win Rate",
+        "description": "Minimum acceptable win rate for recent Binance history when net PnL is negative.",
+    },
+    "binance_performance_guard_min_profit_factor": {
+        "value": 1.10,
+        "type": "float",
+        "category": "Trading",
+        "label": "Binance Guard Min Profit Factor",
+        "description": "Minimum acceptable profit factor for recent Binance history when net PnL is negative.",
+    },
     # ── Subscription ───────────────────────────────────────────
     "subscription_grace_period_days": {
         "value": settings.subscription_grace_period_days,

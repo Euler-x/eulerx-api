@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 from app.models.enums import (
+    Exchange,
     ExecutionStatus,
     OrderType,
     RiskProfile,
@@ -17,6 +18,7 @@ from app.models.enums import (
     StrategyType,
     WalletType,
 )
+from app.models.binance_signal import BinanceSignal
 from app.models.execution import Execution
 from app.models.signal import Signal
 from app.models.strategy import Strategy
@@ -330,3 +332,110 @@ def test_validate_tpsl_prices_blocks_immediate_sell_trigger():
 
     assert valid is False
     assert "SELL stop_loss" in reason
+
+
+@pytest.mark.asyncio
+async def test_binance_performance_guard_blocks_losing_sl_heavy_history(setup_db):
+    user_id = uuid.uuid4()
+    strategy_id = uuid.uuid4()
+    target_signal_id = uuid.uuid4()
+
+    async with TestSessionFactory() as session:
+        user = User(
+            id=user_id,
+            wallet_address_hash="binanceguard" * 5 + "abcd",
+            wallet_type=WalletType.CONNECTED,
+        )
+        session.add(user)
+
+        strategy = Strategy(
+            id=strategy_id,
+            user_id=user_id,
+            name="Binance Guard Strategy",
+            strategy_type=StrategyType.MODERATE,
+            risk_profile=RiskProfile.MEDIUM,
+            allocation_pct=25.0,
+            is_active=True,
+            max_positions=5,
+        )
+        session.add(strategy)
+
+        for idx in range(6):
+            signal_id = uuid.uuid4()
+            signal = BinanceSignal(
+                id=signal_id,
+                symbol="ETHUSDT",
+                direction=SignalDirection.SELL,
+                confidence=0.9,
+                entry_price=Decimal("3000"),
+                take_profit=Decimal("2850"),
+                stop_loss=Decimal("3060"),
+                status=SignalStatus.FILLED,
+            )
+            session.add(signal)
+            session.add(
+                Execution(
+                    id=uuid.uuid4(),
+                    binance_signal_id=signal_id,
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    wallet_address_hash="binanceguard" * 5 + "abcd",
+                    order_type=OrderType.MARKET,
+                    direction=SignalDirection.SELL,
+                    entry_price=Decimal("3000"),
+                    exit_price=Decimal("3060" if idx < 4 else "2850"),
+                    quantity=Decimal("1"),
+                    leverage=1.0,
+                    pnl=Decimal("-60" if idx < 4 else "25"),
+                    status=ExecutionStatus.CLOSED,
+                    close_reason="stop_loss" if idx < 4 else "take_profit",
+                    exchange=Exchange.BINANCE,
+                )
+            )
+
+        target_signal = BinanceSignal(
+            id=target_signal_id,
+            symbol="ETHUSDT",
+            direction=SignalDirection.SELL,
+            confidence=0.92,
+            entry_price=Decimal("3000"),
+            take_profit=Decimal("2850"),
+            stop_loss=Decimal("3060"),
+            status=SignalStatus.NEW,
+        )
+        session.add(target_signal)
+        await session.commit()
+
+    ate = ATEService()
+    async with TestSessionFactory() as session:
+        signal = await session.get(BinanceSignal, target_signal_id)
+        allowed, reason = await ate._evaluate_binance_performance_guard(
+            session, signal
+        )
+
+    assert allowed is False
+    assert "SL 4 > TP 2" in reason
+    assert "total_pnl" in reason
+
+
+@pytest.mark.asyncio
+async def test_binance_performance_guard_allows_insufficient_history(setup_db):
+    signal = BinanceSignal(
+        id=uuid.uuid4(),
+        symbol="NEWUSDT",
+        direction=SignalDirection.BUY,
+        confidence=0.92,
+        entry_price=Decimal("10"),
+        take_profit=Decimal("11"),
+        stop_loss=Decimal("9.5"),
+        status=SignalStatus.NEW,
+    )
+
+    ate = ATEService()
+    async with TestSessionFactory() as session:
+        allowed, reason = await ate._evaluate_binance_performance_guard(
+            session, signal
+        )
+
+    assert allowed is True
+    assert "Not enough Binance history" in reason

@@ -394,6 +394,123 @@ class ATEService:
             error_message=error_message[:500],
         )
 
+    @staticmethod
+    def _summarize_execution_performance(
+        executions: list[Execution],
+    ) -> dict[str, float | int]:
+        trades = len(executions)
+        gross_profit = sum(
+            float(e.pnl or 0) for e in executions if float(e.pnl or 0) > 0
+        )
+        gross_loss = abs(
+            sum(float(e.pnl or 0) for e in executions if float(e.pnl or 0) < 0)
+        )
+        wins = sum(1 for e in executions if float(e.pnl or 0) > 0)
+        stop_losses = sum(1 for e in executions if e.close_reason == "stop_loss")
+        take_profits = sum(1 for e in executions if e.close_reason == "take_profit")
+        total_pnl = gross_profit - gross_loss
+        profit_factor = (
+            gross_profit / gross_loss
+            if gross_loss > 0
+            else float("inf")
+            if gross_profit > 0
+            else 0.0
+        )
+
+        return {
+            "trades": trades,
+            "wins": wins,
+            "losses": trades - wins,
+            "stop_losses": stop_losses,
+            "take_profits": take_profits,
+            "total_pnl": total_pnl,
+            "win_rate": wins / trades if trades else 0.0,
+            "profit_factor": profit_factor,
+        }
+
+    async def _evaluate_binance_performance_guard(
+        self,
+        db: AsyncSession,
+        signal: BinanceSignal,
+    ) -> tuple[bool, str]:
+        """Block Binance setups when prior closed trades show poor expectancy."""
+        from app.services.dynamic_config import get_config
+
+        enabled = int(await get_config("binance_performance_guard_enabled", 1, db))
+        if not enabled:
+            return True, "Binance performance guard disabled"
+
+        min_trades = int(
+            await get_config("binance_performance_guard_min_trades", 6, db)
+        )
+        lookback = int(await get_config("binance_performance_guard_lookback", 30, db))
+        min_win_rate = float(
+            await get_config("binance_performance_guard_min_win_rate", 0.45, db)
+        )
+        min_profit_factor = float(
+            await get_config("binance_performance_guard_min_profit_factor", 1.10, db)
+        )
+
+        def _closed_binance_query(match_symbol: bool):
+            query = (
+                select(Execution)
+                .join(BinanceSignal, Execution.binance_signal_id == BinanceSignal.id)
+                .where(
+                    Execution.exchange == Exchange.BINANCE,
+                    Execution.status == ExecutionStatus.CLOSED,
+                    Execution.pnl.isnot(None),
+                    Execution.direction == signal.direction,
+                )
+                .order_by(Execution.closed_at.desc(), Execution.created_at.desc())
+                .limit(max(1, lookback))
+            )
+            if match_symbol:
+                query = query.where(BinanceSignal.symbol == signal.symbol)
+            return query
+
+        result = await db.execute(_closed_binance_query(match_symbol=True))
+        executions = list(result.scalars().all())
+        scope = f"{signal.symbol} {signal.direction.value.upper()}"
+
+        if len(executions) < min_trades:
+            result = await db.execute(_closed_binance_query(match_symbol=False))
+            executions = list(result.scalars().all())
+            scope = f"all Binance {signal.direction.value.upper()}"
+
+        stats = self._summarize_execution_performance(executions)
+        if stats["trades"] < min_trades:
+            return (
+                True,
+                f"Not enough Binance history for guard ({stats['trades']}/{min_trades})",
+            )
+
+        stop_losses = int(stats["stop_losses"])
+        take_profits = int(stats["take_profits"])
+        total_pnl = float(stats["total_pnl"])
+        win_rate = float(stats["win_rate"])
+        profit_factor = float(stats["profit_factor"])
+        poor_expectancy = total_pnl < 0 and (
+            stop_losses > take_profits
+            or win_rate < min_win_rate
+            or profit_factor < min_profit_factor
+        )
+
+        if poor_expectancy:
+            pf_label = "inf" if profit_factor == float("inf") else f"{profit_factor:.2f}"
+            reason = (
+                "Binance performance guard blocked setup: "
+                f"{scope} recent history has SL {stop_losses} > TP {take_profits}, "
+                f"win_rate {win_rate:.0%}, profit_factor {pf_label}, "
+                f"total_pnl {total_pnl:+.4f}"
+            )
+            return False, reason
+
+        return (
+            True,
+            f"Binance performance acceptable for {scope}: "
+            f"SL {stop_losses}, TP {take_profits}, pnl {total_pnl:+.4f}",
+        )
+
     async def execute_signal(
         self,
         db: AsyncSession,
@@ -661,6 +778,24 @@ class ATEService:
                     return execution
 
         # ── Position sizing with real balance + szDecimals ───────────
+        if is_binance:
+            guard_ok, guard_reason = await self._evaluate_binance_performance_guard(
+                db, signal
+            )
+            if not guard_ok:
+                logger.info("Signal %s rejected: %s", signal.id, guard_reason)
+                execution = self._create_failed_execution(
+                    signal, user, strategy, guard_reason
+                )
+                db.add(execution)
+                await db.flush()
+                return execution
+            logger.info(
+                "Binance performance guard passed for %s: %s",
+                signal.id,
+                guard_reason,
+            )
+
         entry_price = float(signal.entry_price)
         import math as _math
 
