@@ -299,6 +299,30 @@ def test_admin_task_definitions_expose_exchange_pipelines():
     assert "analysis-pipeline-binance" in task_names
 
 
+@pytest.mark.asyncio
+async def test_legacy_analysis_disabled_flag_does_not_block_exchange_task(setup_db):
+    """Legacy aggregate disables should not silently kill new exchange tasks."""
+    from sqlalchemy import delete
+
+    from app.models.admin_config import AdminConfig
+    from app.worker.tasks import _is_exchange_pipeline_disabled
+
+    async with TestSessionFactory() as session:
+        await session.execute(
+            delete(AdminConfig).where(AdminConfig.key == "disabled_tasks")
+        )
+        session.add(
+            AdminConfig(
+                key="disabled_tasks",
+                value={"tasks": ["analysis-pipeline"]},
+                description="List of disabled scheduled task names",
+            )
+        )
+        await session.commit()
+
+    assert await _is_exchange_pipeline_disabled("hyperliquid") is False
+
+
 def test_exchange_pipeline_schedules_are_staggered():
     """Exchange pipelines should not all burst AI analysis at the same minute."""
     from app.worker.celery_app import celery_app

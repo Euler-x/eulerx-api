@@ -87,15 +87,9 @@ async def _is_task_disabled(task_name: str) -> bool:
 
 
 async def _is_exchange_pipeline_disabled(exchange: str) -> bool:
-    """Check whether this exchange pipeline is disabled.
-
-    The old aggregate "analysis-pipeline" flag still disables all exchange
-    pipelines for conservative backward compatibility after deployment.
-    """
+    """Check whether this exchange-specific pipeline is disabled."""
     task_name = EXCHANGE_PIPELINE_TASKS[exchange]
-    return await _is_task_disabled(task_name) or await _is_task_disabled(
-        "analysis-pipeline"
-    )
+    return await _is_task_disabled(task_name)
 
 
 # ── Async Pipeline Functions ─────────────────────────────────────
