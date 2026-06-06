@@ -51,11 +51,17 @@ class BinanceService:
         ).hexdigest()
 
     def _auth_params(self, api_secret: str, extra: dict | None = None) -> dict:
-        """Build timestamp + recvWindow + signature params."""
+        """Build timestamp + recvWindow + signature params.
+
+        recvWindow is set to 10s (10000ms) — Binance allows up to 60000ms.
+        The previous 5000ms was too tight for cross-region requests during
+        volatile markets, producing spurious -1021 timestamp errors that
+        caused the ATE to abort the order (and any attached TP/SL).
+        """
         params: dict[str, Any] = {
             **(extra or {}),
             "timestamp": int(time.time() * 1000),
-            "recvWindow": 5000,
+            "recvWindow": 10000,
         }
         params["signature"] = self._sign(api_secret, params)
         return params
@@ -835,7 +841,13 @@ class BinanceService:
     async def update_leverage(
         self, api_key: str, api_secret: str, symbol: str, leverage: int
     ) -> dict:
-        """POST /fapi/v1/leverage — set leverage for a symbol."""
+        """POST /fapi/v1/leverage — set leverage for a symbol.
+
+        Binance returns error code -4028 ("No need to change leverage")
+        when the leverage is already at the requested value. This is NOT
+        a failure — treat it as success so the caller doesn't unnecessarily
+        retry with lower leverage values.
+        """
 
         def _set():
             body = self._auth_params(
@@ -853,7 +865,12 @@ class BinanceService:
                     return {"success": True, "result": data}
                 except httpx.HTTPStatusError as e:
                     err = e.response.json() if e.response.content else {}
-                    return {"success": False, "error": err.get("msg", str(e))}
+                    code = err.get("code")
+                    msg = str(err.get("msg", ""))
+                    # "No need to change leverage" — already at this value
+                    if code == -4028 or "no need to change" in msg.lower():
+                        return {"success": True, "result": err, "unchanged": True}
+                    return {"success": False, "error": msg, "code": code}
                 except Exception as e:
                     return {"success": False, "error": str(e)}
 
@@ -880,16 +897,25 @@ class BinanceService:
                 "side": "BUY" if is_buy else "SELL",
                 "type": normalized_type,
                 "quantity": size,
-                "positionSide": position_side,
             }
+            # In HEDGE mode, positionSide is REQUIRED and must match the side
+            # (BUY -> LONG, SELL -> SHORT). In ONE_WAY mode, positionSide is
+            # either omitted or set to BOTH.
+            if position_side == "BOTH":
+                # ONE_WAY mode: positionSide=BOTH is the default and required
+                # for reduceOnly to work. Binance rejects BOTH in HEDGE mode.
+                params["positionSide"] = "BOTH"
+                if reduce_only:
+                    params["reduceOnly"] = "true"
+            else:
+                # HEDGE mode: LONG/SHORT, no reduceOnly needed
+                params["positionSide"] = position_side
+
             if order_type == "limit" and price:
                 params["price"] = price
                 params["timeInForce"] = "GTC"
             if normalized_type == "MARKET":
                 params["newOrderRespType"] = "RESULT"
-            if reduce_only and position_side == "BOTH":
-                # reduceOnly is only valid in ONE_WAY mode
-                params["reduceOnly"] = "true"
 
             body = self._auth_params(api_secret, params)
             with httpx.Client(timeout=15.0) as client:
@@ -978,6 +1004,15 @@ class BinanceService:
         Binance requires TP/SL as separate algo orders.
         Both use workingType=MARK_PRICE to prevent false triggers from wicks.
         The closing side is opposite to the position direction.
+
+        NOTE on priceProtect: enabling priceProtect ("true") causes Binance to
+        REJECT the SL if the mark price has already moved past the trigger
+        between the time the order is signed and when it reaches the matching
+        engine. In volatile markets, this means the SL "hits" the moment the
+        order is received — the trigger price has already been crossed. We
+        therefore disable priceProtect to keep the conditional order resting
+        on the book. False-triggers from wicks are still mitigated by using
+        MARK_PRICE (not last-trade) as the trigger reference.
         """
         tick_size = await self.get_tick_size(symbol)
 
@@ -1004,7 +1039,6 @@ class BinanceService:
                     "workingType": "MARK_PRICE",
                     "triggerPrice": rounded,
                     "closePosition": "true",
-                    "priceProtect": "true",
                     "clientAlgoId": client_algo_id,
                 }
                 body = self._auth_params(api_secret, params)

@@ -114,13 +114,31 @@ class ATEService:
 
         quantity = position_value / entry_price
 
-        # Round to asset's szDecimals precision
-        quantity = round(quantity, sz_decimals)
+        # Round DOWN to asset's szDecimals precision (exchange rejects quantities
+        # with too many decimals; rounding up could produce a value the exchange
+        # doesn't accept).
+        from decimal import ROUND_DOWN, Decimal
 
-        # HyperLiquid minimum notional is ~$10
+        if sz_decimals > 0:
+            quantizer = Decimal(10) ** -sz_decimals
+            quantity = float(
+                Decimal(str(quantity)).quantize(quantizer, rounding=ROUND_DOWN)
+            )
+        else:
+            quantity = float(int(quantity))
+
+        # HyperLiquid minimum notional is $10. If rounding brought us below the
+        # threshold, bump up just enough to clear it — but still bounded by
+        # the calculated position value (don't oversize the trade).
         notional = quantity * entry_price
-        if notional < 10.0:
-            quantity = round(10.5 / entry_price, sz_decimals)
+        if notional < 10.0 and entry_price > 0:
+            min_qty = 10.5 / entry_price  # 5% buffer above $10 floor
+            quantity = min(min_qty, position_value / entry_price)
+            if sz_decimals > 0:
+                quantizer = Decimal(10) ** -sz_decimals
+                quantity = float(
+                    Decimal(str(quantity)).quantize(quantizer, rounding=ROUND_DOWN)
+                )
             logger.info(
                 "Notional $%.2f below $10 minimum, adjusted qty to %s",
                 notional,
@@ -836,7 +854,17 @@ class ATEService:
                 max_order_qty,
                 signal.symbol if hasattr(signal, "symbol") else "unknown",
             )
-            quantity = round(max_order_qty, sz_decimals)
+            from decimal import ROUND_DOWN, Decimal
+
+            if sz_decimals > 0:
+                quantizer = Decimal(10) ** -sz_decimals
+                quantity = float(
+                    Decimal(str(max_order_qty)).quantize(
+                        quantizer, rounding=ROUND_DOWN
+                    )
+                )
+            else:
+                quantity = float(int(max_order_qty))
         if quantity <= 0:
             logger.warning("Calculated position size is 0 for signal %s", signal.id)
             execution = self._create_failed_execution(
@@ -982,7 +1010,11 @@ class ATEService:
                 return execution
             api_key, api_secret = bybit_keys
 
-            # Set leverage — retry with lower values if symbol has a cap
+            # Set leverage — retry with lower values if symbol has a cap.
+            # Bybit error code reference:
+            #   110043 = "leverage not modified" (already at this value) — OK
+            #   110094 = "risk limit updated" — retry with lower
+            #   maxLeverage in message = symbol's max leverage exceeded — retry lower
             actual_leverage = target_leverage
             if target_leverage >= 1:
                 for lev in [target_leverage, 10, 5, 3, 1]:
@@ -993,11 +1025,29 @@ class ATEService:
                         actual_leverage = lev
                         break
                     err = str(lev_result.get("error", ""))
-                    if "not modified" in err:
+                    err_lower = err.lower()
+                    # "leverage not modified" means it's already at this level — accept
+                    if "not modified" in err_lower or "110043" in err:
                         actual_leverage = lev
+                        logger.info(
+                            "Bybit leverage for %s already at %dx — accepting",
+                            signal.symbol,
+                            lev,
+                        )
                         break
-                    if "maxLeverage" in err or "110043" in err:
-                        continue  # try next lower leverage
+                    # Symbol-level max leverage exceeded — try next lower
+                    if (
+                        "maxleverage" in err_lower
+                        or "exceed" in err_lower
+                        or "110094" in err
+                    ):
+                        logger.info(
+                            "Bybit leverage %dx exceeds %s cap, trying lower",
+                            lev,
+                            signal.symbol,
+                        )
+                        continue
+                    # Other error (auth, network, etc.) — don't retry blindly
                     logger.warning(
                         "Failed to set Bybit leverage to %dx for %s: %s",
                         lev,
@@ -1006,13 +1056,34 @@ class ATEService:
                     )
                     break
 
-            # Recalculate position size if leverage was reduced
+            # Recalculate position size if leverage was reduced.
+            # Round DOWN (not to nearest) — exchanges reject quantities with
+            # too many decimals, and rounding up could exceed max_order_qty.
             if actual_leverage != target_leverage and actual_leverage > 0:
+                from decimal import ROUND_DOWN, Decimal
+
                 ratio = actual_leverage / target_leverage
-                quantity = round(quantity * ratio, sz_decimals)
+                rescaled = quantity * ratio
+                if sz_decimals > 0:
+                    quantizer = Decimal(10) ** -sz_decimals
+                    quantity = float(
+                        Decimal(str(rescaled)).quantize(
+                            quantizer, rounding=ROUND_DOWN
+                        )
+                    )
+                else:
+                    quantity = float(int(rescaled))
                 # Re-apply max_order_qty cap after leverage rescaling
                 if quantity > max_order_qty and max_order_qty < float("inf"):
-                    quantity = round(max_order_qty, sz_decimals)
+                    if sz_decimals > 0:
+                        quantizer = Decimal(10) ** -sz_decimals
+                        quantity = float(
+                            Decimal(str(max_order_qty)).quantize(
+                                quantizer, rounding=ROUND_DOWN
+                            )
+                        )
+                    else:
+                        quantity = float(int(max_order_qty))
                 notional = quantity * entry_price
 
             logger.info(
@@ -1097,7 +1168,10 @@ class ATEService:
             hedge_mode = await user_binance.get_position_mode(api_key, api_secret)
             position_side = ("LONG" if is_buy else "SHORT") if hedge_mode else "BOTH"
 
-            # Set leverage — retry with lower values if symbol has a cap
+            # Set leverage — retry with lower values if symbol has a cap.
+            # Binance error code reference:
+            #   -4028: "Leverage {} is not valid" (exceeds symbol max)
+            #   "leverage not changed": already at this value — OK
             actual_leverage = target_leverage
             if target_leverage >= 1:
                 for lev in [target_leverage, 10, 5, 3, 1]:
@@ -1108,9 +1182,30 @@ class ATEService:
                         actual_leverage = lev
                         break
                     err = str(lev_result.get("error", ""))
-                    if "leverage not changed" in err.lower():
+                    err_lower = err.lower()
+                    # Already at this leverage — accept
+                    if "not changed" in err_lower or "no need" in err_lower:
                         actual_leverage = lev
+                        logger.info(
+                            "Binance leverage for %s already at %dx — accepting",
+                            signal.symbol,
+                            lev,
+                        )
                         break
+                    # Exceeds symbol max — try next lower
+                    if (
+                        "-4028" in err
+                        or "not valid" in err_lower
+                        or "exceed" in err_lower
+                        or "max" in err_lower
+                    ):
+                        logger.info(
+                            "Binance leverage %dx exceeds %s cap, trying lower",
+                            lev,
+                            signal.symbol,
+                        )
+                        continue
+                    # Other error — don't retry blindly
                     logger.warning(
                         "Failed to set Binance leverage to %dx for %s: %s",
                         lev,
@@ -1121,10 +1216,29 @@ class ATEService:
                         break
 
             if actual_leverage != target_leverage and actual_leverage > 0:
+                from decimal import ROUND_DOWN, Decimal
+
                 ratio = actual_leverage / target_leverage
-                quantity = round(quantity * ratio, sz_decimals)
+                rescaled = quantity * ratio
+                if sz_decimals > 0:
+                    quantizer = Decimal(10) ** -sz_decimals
+                    quantity = float(
+                        Decimal(str(rescaled)).quantize(
+                            quantizer, rounding=ROUND_DOWN
+                        )
+                    )
+                else:
+                    quantity = float(int(rescaled))
                 if quantity > max_order_qty and max_order_qty < float("inf"):
-                    quantity = round(max_order_qty, sz_decimals)
+                    if sz_decimals > 0:
+                        quantizer = Decimal(10) ** -sz_decimals
+                        quantity = float(
+                            Decimal(str(max_order_qty)).quantize(
+                                quantizer, rounding=ROUND_DOWN
+                            )
+                        )
+                    else:
+                        quantity = float(int(max_order_qty))
                 notional = quantity * entry_price
 
             logger.info(
@@ -1195,6 +1309,28 @@ class ATEService:
                 if user.wallet_type == WalletType.CONNECTED
                 else None
             )
+
+            # Pre-flight: verify the agent wallet is approved by the main
+            # account for CONNECTED wallets. An unapproved agent will cause
+            # every order to silently fail on-chain. Skip for GENERATED
+            # wallets (they sign and trade from the same key).
+            if account_address and user.encrypted_private_key:
+                ok, reason = await self.hyperliquid.validate_agent_wallet(
+                    private_key, account_address
+                )
+                if not ok:
+                    logger.error(
+                        "HL agent wallet not approved for user %s account %s: %s",
+                        user.id,
+                        account_address,
+                        reason,
+                    )
+                    execution.status = ExecutionStatus.FAILED
+                    execution.error_message = (
+                        f"Hyperliquid agent wallet not approved: {reason}"
+                    )
+                    await db.flush()
+                    return execution
 
             if target_leverage >= 1:
                 lev_result = await self.hyperliquid.update_leverage(
@@ -1278,37 +1414,52 @@ class ATEService:
                 # above to avoid a second decryption that could fail independently.
                 if tp_price is not None and sl_price is not None:
                     _tpsl_confirmed = False
-                    try:
-                        tpsl_result = await user_bybit.place_tp_sl_orders(
-                            api_key=api_key,
-                            api_secret=api_secret,
-                            symbol=signal.symbol,
-                            is_buy=is_buy,
-                            take_profit_price=tp_price,
-                            stop_loss_price=sl_price,
-                        )
-                        if tpsl_result.get("success"):
-                            _tpsl_confirmed = True
-                            logger.info(
-                                "Bybit TP/SL confirmed for %s: tp=$%s sl=$%s",
-                                signal.symbol,
-                                tp_price,
-                                sl_price,
+                    # Retry up to 3 times — Bybit's position state can lag
+                    # a few hundred ms behind the fill, and set_trading_stop
+                    # will fail with 130056 ("position not found") if we
+                    # race ahead of the position state update.
+                    for _tpsl_attempt in range(3):
+                        try:
+                            tpsl_result = await user_bybit.place_tp_sl_orders(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                symbol=signal.symbol,
+                                is_buy=is_buy,
+                                take_profit_price=tp_price,
+                                stop_loss_price=sl_price,
                             )
-                        else:
+                            if tpsl_result.get("success"):
+                                _tpsl_confirmed = True
+                                logger.info(
+                                    "Bybit TP/SL confirmed for %s: tp=$%s sl=$%s",
+                                    signal.symbol,
+                                    tp_price,
+                                    sl_price,
+                                )
+                                break
+                            err = tpsl_result.get("error", "")
+                            # Position-state race: try again after a short wait
+                            if "130056" in err or "not found" in err.lower():
+                                if _tpsl_attempt < 2:
+                                    await asyncio.sleep(0.5)
+                                    continue
                             logger.error(
-                                "Bybit set_trading_stop failed for %s: %s "
+                                "Bybit set_trading_stop failed for %s (attempt %d): %s "
                                 "— closing position as safety measure",
                                 signal.symbol,
-                                tpsl_result.get("error"),
+                                _tpsl_attempt + 1,
+                                err,
                             )
-                    except Exception as e:
-                        logger.error(
-                            "Exception confirming Bybit TP/SL for %s: %s "
-                            "— closing position as safety measure",
-                            signal.symbol,
-                            e,
-                        )
+                            break
+                        except Exception as e:
+                            logger.error(
+                                "Exception confirming Bybit TP/SL for %s "
+                                "(attempt %d): %s — closing position as safety measure",
+                                signal.symbol,
+                                _tpsl_attempt + 1,
+                                e,
+                            )
+                            break
 
                     if not _tpsl_confirmed:
                         try:
@@ -1376,38 +1527,56 @@ class ATEService:
                 # Reuse api_key/api_secret and position_side from order placement above.
                 if tp_price is not None and sl_price is not None:
                     _tpsl_confirmed = False
-                    try:
-                        tpsl_result = await user_binance.place_tp_sl_orders(
-                            api_key=api_key,
-                            api_secret=api_secret,
-                            symbol=signal.symbol,
-                            is_buy=is_buy,
-                            take_profit_price=tp_price,
-                            stop_loss_price=sl_price,
-                            position_side=position_side,
-                        )
-                        if tpsl_result.get("success"):
-                            _tpsl_confirmed = True
-                            logger.info(
-                                "Binance TP/SL confirmed for %s: tp=$%s sl=$%s",
-                                signal.symbol,
-                                tp_price,
-                                sl_price,
+                    # Retry up to 3 times for transient errors (rate limits, -1021
+                    # timestamp drift, position state lag). Don't retry on
+                    # client errors like invalid trigger price.
+                    for _tpsl_attempt in range(3):
+                        try:
+                            tpsl_result = await user_binance.place_tp_sl_orders(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                symbol=signal.symbol,
+                                is_buy=is_buy,
+                                take_profit_price=tp_price,
+                                stop_loss_price=sl_price,
+                                position_side=position_side,
                             )
-                        else:
+                            if tpsl_result.get("success"):
+                                _tpsl_confirmed = True
+                                logger.info(
+                                    "Binance TP/SL confirmed for %s: tp=$%s sl=$%s",
+                                    signal.symbol,
+                                    tp_price,
+                                    sl_price,
+                                )
+                                break
+                            err = str(tpsl_result.get("results", ""))
+                            # Transient errors worth retrying
+                            if (
+                                "-1021" in err  # timestamp drift
+                                or "429" in err  # rate limit
+                                or "1003" in err  # too many requests
+                            ):
+                                if _tpsl_attempt < 2:
+                                    await asyncio.sleep(0.5 * (_tpsl_attempt + 1))
+                                    continue
                             logger.error(
-                                "Binance TP/SL failed for %s: %s "
+                                "Binance TP/SL failed for %s (attempt %d): %s "
                                 "— closing position as safety measure",
                                 signal.symbol,
-                                tpsl_result.get("results"),
+                                _tpsl_attempt + 1,
+                                err,
                             )
-                    except Exception as e:
-                        logger.error(
-                            "Exception placing Binance TP/SL for %s: %s "
-                            "— closing position as safety measure",
-                            signal.symbol,
-                            e,
-                        )
+                            break
+                        except Exception as e:
+                            logger.error(
+                                "Exception placing Binance TP/SL for %s "
+                                "(attempt %d): %s — closing position as safety measure",
+                                signal.symbol,
+                                _tpsl_attempt + 1,
+                                e,
+                            )
+                            break
 
                     if not _tpsl_confirmed:
                         try:

@@ -701,7 +701,7 @@ class HyperliquidService:
         price: float | None = None,
         order_type: str = "market",
         reduce_only: bool = False,
-        slippage: float = 0.01,
+        slippage: float = 0.03,
     ) -> dict:
         """Place an order on Hyperliquid using the agent wallet pattern.
 
@@ -716,7 +716,11 @@ class HyperliquidService:
             price: Limit price. If None, uses market price with slippage.
             order_type: "market" or "limit".
             reduce_only: If True, only reduces existing position.
-            slippage: Slippage tolerance for market orders (default 1%).
+            slippage: Slippage tolerance for market orders (default 3%).
+                Hyperliquid uses IOC limit orders for "market" execution; if the
+                slippage is too tight the IOC order won't fill and the trade
+                is silently dropped. 3% gives enough headroom for volatile
+                coins while still preventing extreme fills.
         """
         try:
             from eth_account import Account
@@ -797,10 +801,17 @@ class HyperliquidService:
                 logger.error("HyperLiquid order error: %s", err_msg)
                 return {"success": False, "error": str(err_msg)}
 
-            # Extract order ID from response
+            # Extract order ID and fill details from response.
+            # HL can return many non-success statuses that are NOT dicts with
+            # a "filled" or "resting" key — e.g. "marginCanceled",
+            # "vaultWithdrawn", "openInterestCapReached", "selfTradeCanceled",
+            # "reduceOnlyOutOfLimit", "badAloPx", "badTriggerPx", "minTradeNtl",
+            # "perpMarginRejected", "badSzi". These arrive as plain strings in
+            # the statuses list and mean the order did NOT execute.
             oid = None
             avg_price = 0.0
             executed_qty = 0.0
+            order_error = None
             response = order_result.get("response", {})
             if isinstance(response, dict):
                 statuses = response.get("data", {}).get("statuses", [])
@@ -812,17 +823,40 @@ class HyperliquidService:
                         avg_price = float(filled.get("avgPx", 0) or 0)
                         executed_qty = float(filled.get("totalSz", 0) or 0)
                         if "error" in first:
+                            order_error = first["error"]
                             logger.error(
-                                "HyperLiquid order rejected: %s",
-                                first["error"],
+                                "HyperLiquid order rejected: %s", order_error
                             )
-                            return {
-                                "success": False,
-                                "error": first["error"],
-                            }
                     elif isinstance(first, str):
+                        # String statuses are error/rejection codes
+                        order_error = first
                         logger.error("HyperLiquid order rejected: %s", first)
-                        return {"success": False, "error": first}
+                else:
+                    # No statuses returned at all — treat as error
+                    order_error = "No statuses returned from Hyperliquid"
+                    logger.error(order_error)
+            else:
+                order_error = f"Unexpected response type: {type(response).__name__}"
+                logger.error("HyperLiquid unexpected response: %s", response)
+
+            if order_error:
+                return {"success": False, "error": order_error}
+
+            # If we got here without an oid AND no fill, the order was not
+            # executed (resting on the book without a fill, or silently dropped).
+            if not oid and executed_qty == 0:
+                logger.error(
+                    "HyperLiquid order returned no oid and no fill for %s %s "
+                    "size=%s price=%s — treating as failed",
+                    "BUY" if is_buy else "SELL",
+                    symbol,
+                    size,
+                    price,
+                )
+                return {
+                    "success": False,
+                    "error": "Order did not fill (no oid, no executed qty)",
+                }
 
             # Look up the real on-chain tx hash from user fills
             tx_hash = None
@@ -1106,6 +1140,7 @@ class HyperliquidService:
         is_buy: bool,
         account_address: str | None = None,
     ) -> dict:
+        """Close a position by placing an opposite-side market order with reduce_only."""
         return await self.place_order(
             wallet_private_key=wallet_private_key,
             symbol=symbol,
@@ -1114,6 +1149,7 @@ class HyperliquidService:
             account_address=account_address,
             order_type="market",
             reduce_only=True,
+            slippage=0.03,  # 3% slippage for emergency closes
         )
 
     async def get_spot_state(self, wallet_address: str) -> dict:
@@ -1181,6 +1217,17 @@ class HyperliquidService:
                 return False, (
                     f"Main wallet {account_address} has no perps account on HyperLiquid. "
                     "Please deposit funds to the perps margin first."
+                )
+
+            # The agent wallet must be approved by the main account. Without
+            # approval, every order attempt will fail on-chain. We can't
+            # directly query the approval state, but we can detect obvious
+            # cases: if the agent and main addresses are the same, the user
+            # has not set up an agent wallet.
+            if agent_address.lower() == account_address.lower():
+                return False, (
+                    "Agent wallet address matches the main account — you need a "
+                    "separate agent wallet. Go to wallet settings to generate one."
                 )
 
             logger.info(
