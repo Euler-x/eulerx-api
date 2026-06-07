@@ -824,9 +824,7 @@ class HyperliquidService:
                         executed_qty = float(filled.get("totalSz", 0) or 0)
                         if "error" in first:
                             order_error = first["error"]
-                            logger.error(
-                                "HyperLiquid order rejected: %s", order_error
-                            )
+                            logger.error("HyperLiquid order rejected: %s", order_error)
                     elif isinstance(first, str):
                         # String statuses are error/rejection codes
                         order_error = first

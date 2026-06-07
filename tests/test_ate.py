@@ -409,9 +409,7 @@ async def test_binance_performance_guard_blocks_losing_sl_heavy_history(setup_db
     ate = ATEService()
     async with TestSessionFactory() as session:
         signal = await session.get(BinanceSignal, target_signal_id)
-        allowed, reason = await ate._evaluate_binance_performance_guard(
-            session, signal
-        )
+        allowed, reason = await ate._evaluate_binance_performance_guard(session, signal)
 
     assert allowed is False
     assert "SL 4 > TP 2" in reason
@@ -433,9 +431,7 @@ async def test_binance_performance_guard_allows_insufficient_history(setup_db):
 
     ate = ATEService()
     async with TestSessionFactory() as session:
-        allowed, reason = await ate._evaluate_binance_performance_guard(
-            session, signal
-        )
+        allowed, reason = await ate._evaluate_binance_performance_guard(session, signal)
 
     assert allowed is True
     assert "Not enough Binance history" in reason

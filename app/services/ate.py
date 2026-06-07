@@ -514,7 +514,9 @@ class ATEService:
         )
 
         if poor_expectancy:
-            pf_label = "inf" if profit_factor == float("inf") else f"{profit_factor:.2f}"
+            pf_label = (
+                "inf" if profit_factor == float("inf") else f"{profit_factor:.2f}"
+            )
             reason = (
                 "Binance performance guard blocked setup: "
                 f"{scope} recent history has SL {stop_losses} > TP {take_profits}, "
@@ -859,9 +861,7 @@ class ATEService:
             if sz_decimals > 0:
                 quantizer = Decimal(10) ** -sz_decimals
                 quantity = float(
-                    Decimal(str(max_order_qty)).quantize(
-                        quantizer, rounding=ROUND_DOWN
-                    )
+                    Decimal(str(max_order_qty)).quantize(quantizer, rounding=ROUND_DOWN)
                 )
             else:
                 quantity = float(int(max_order_qty))
@@ -1067,9 +1067,7 @@ class ATEService:
                 if sz_decimals > 0:
                     quantizer = Decimal(10) ** -sz_decimals
                     quantity = float(
-                        Decimal(str(rescaled)).quantize(
-                            quantizer, rounding=ROUND_DOWN
-                        )
+                        Decimal(str(rescaled)).quantize(quantizer, rounding=ROUND_DOWN)
                     )
                 else:
                     quantity = float(int(rescaled))
@@ -1223,9 +1221,7 @@ class ATEService:
                 if sz_decimals > 0:
                     quantizer = Decimal(10) ** -sz_decimals
                     quantity = float(
-                        Decimal(str(rescaled)).quantize(
-                            quantizer, rounding=ROUND_DOWN
-                        )
+                        Decimal(str(rescaled)).quantize(quantizer, rounding=ROUND_DOWN)
                     )
                 else:
                     quantity = float(int(rescaled))

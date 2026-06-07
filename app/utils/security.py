@@ -135,11 +135,9 @@ def verify_token(token: str, expected_type: str = "access") -> dict:
 # with SHA-256 before storage so a database leak does not expose them.
 
 
-
 def hash_verification_token(token: str) -> str:
     """Hash a short-lived verification code or reset token for secure storage."""
     return hashlib.sha256(token.encode()).hexdigest()
-
 
 
 # ─── Wallet Signature Verification ──────────────────────
